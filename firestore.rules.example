@@ -1,9 +1,0 @@
-// EXEMPLO: adicione este bloco DENTRO DAS REGRAS EXISTENTES do Firestore.
-// NAO faça deploy deste arquivo isoladamente, pois sobrescreveria regras de outros sistemas.
-// As Cloud Functions usam o Admin SDK e ignoram regras, após validar Firebase Auth.
-match /shopeeStudioUsers/{uid}/{document=**} {
-  allow read, write: if false;
-}
-match /shopeeStudioAuthStates/{state} {
-  allow read, write: if false;
-}

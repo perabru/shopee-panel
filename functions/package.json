@@ -1,8 +1,8 @@
 {
-  "name":"shopee-studio-functions",
-  "version":"1.0.0",
+  "name":"shopee-panel-affiliate-functions",
+  "version":"2.0.0",
+  "description":"API de afiliados Shopee, multiusuário, Firebase Functions",
   "private":true,
-  "description":"Backend seguro para autorização, produtos e financeiro Shopee Open Platform v2",
   "main":"index.js",
   "engines":{"node":"22"},
   "scripts":{"test":"node --test ../tests/*.test.cjs"},
