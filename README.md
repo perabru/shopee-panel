@@ -107,8 +107,8 @@ Para credenciais, verifique a disponibilidade de App ID e Secret na área da Sho
 ## Status de implantação
 
 - Arquivos front-end e backend estão no GitHub.
-- O workflow `.github/workflows/pages.yml` publica apenas os arquivos estáticos do site.
-- **A publicação das regras no Firebase e das Cloud Functions não acontece automaticamente por este workflow.** O operador do projeto Firebase deve executar as etapas acima.
+- O GitHub Pages publica automaticamente os arquivos estáticos da raiz da branch `main` pelo fluxo nativo **pages build and deployment**.
+- **A publicação das regras no Firebase e das Cloud Functions não acontece automaticamente pelo GitHub Pages.** O operador do projeto Firebase deve executar as etapas acima.
 - Nenhum teste com uma conta real da Shopee pode ser afirmado sem credenciais válidas e um ambiente Firebase configurado.
 
 ## Verificação local
