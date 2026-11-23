@@ -1,132 +1,124 @@
-# Vitrine Livre — Shopee Panel (Afiliados)
+# Vitrine Livre — Shopee Panel (Firebase Realtime Database)
 
-Aplicação **independente** para criação de vitrines públicas de afiliados. Cada usuário entra com Google, cria sua própria loja, adiciona produtos da Shopee e compartilha um link que leva os compradores diretamente à Shopee. O painel consulta comissões estimadas pela **Open API de Afiliados** quando o proprietário autoriza a integração.
+**Site:** https://perabru.github.io/shopee-panel/  
+**Repositório:** https://github.com/perabru/shopee-panel
 
-Repositório: https://github.com/perabru/shopee-panel  
-URL pública prevista após ativar o Pages: https://perabru.github.io/shopee-panel/
+Esta versão corrige o erro **"Integração ainda não ativada. internal [0]"**. O projeto anterior dependia de uma Cloud Function (`ensureStore`) e tentava usar Cloud Firestore, mas o Firebase do projeto usa **Realtime Database**.
 
-> **Não é uma cópia oficial da Shopee:** a plataforma não processa pagamentos, não representa vendedores, não acessa credenciais de login da Shopee e não afirma ter acesso a saldos sacáveis. A busca depende das ofertas que a API de Afiliados disponibilizar. Sem credenciais, é possível cadastrar *apenas links de afiliado já gerados pelo próprio usuário no portal Shopee*.
+## O que funciona sem Cloud Functions
 
-## Funcionalidades
+- Login com Google pelo Firebase Authentication.
+- Criação da primeira vitrine ao entrar; uma vitrine por usuário Google.
+- Alteração de nome, descrição, referência Shopee e visibilidade.
+- Publicação e exclusão de produtos usando **links de afiliado já gerados pelo próprio usuário** no portal da Shopee.
+- URL pública `https://perabru.github.io/shopee-panel/#/loja/UID` que funciona sem login.
+- Busca de produtos **dentro da vitrine pública** e busca externa no site da Shopee.
+- Nenhum saldo ou comissão é inventado; o painel exibe dados reais apenas quando a API for conectada.
 
-- Login Google via Firebase Authentication (identifica o dono da vitrine, não vincula automaticamente Shopee).
-- Uma vitrine pública por conta, acessível sem login por `#/loja/{uid}`.
-- Pesquisa no catálogo de ofertas da API de Afiliados `productOfferV2` para usuários conectados.
-- Publicação de produto/loja Shopee pela URL, gerando **link rastreável** pela mutation `generateShortLink` com credenciais do dono.
-- Publicação manual com link já convertido pela própria Shopee para quem não possui acesso à API (não é possível verificar a atribuição do link manual).
-- Listagem pública com imagens, preços informativos, categorias, pesquisa interna e redirecionamento para Shopee.
-- Painel individual com total de produtos e relatórios de **comissões estimadas** dos últimos 7 ou 30 dias por `conversionReport`, quando a API estiver conectada.
-- API secret criptografado individualmente com AES-256-GCM em Firestore, chave única gerenciada em Firebase Secret Manager. Nunca expõe credenciais em HTML/JS/GitHub.
-- Regras de Firestore que deixam vitrines publicadas legíveis, restringem o restante e negam todo acesso de navegador às credenciais.
-- Layout responsivo, português, sem dados de vendas fictícios ou coleta automatizada de páginas Shopee.
+A configuração Firebase pública do HTML/JavaScript não é um segredo. A API Shopee não pode ser chamada com um App Secret diretamente de um site estático público.
 
-## O que precisa ser ativado uma única vez pelo administrador
+## O passo obrigatório no Firebase: PUBLICAR REGRAS DO REALTIME DATABASE
 
-### 1. GitHub Pages
+**Projeto:** `gahepatama-4707c`  
+**Instância:** `gahepatama-4707c-default-rtdb`  
+**Banco:** https://gahepatama-4707c-default-rtdb.firebaseio.com
 
-1. Abra **Settings → Pages** neste repositório: https://github.com/perabru/shopee-panel/settings/pages
-2. Escolha `Source → GitHub Actions`, salve.
-3. Em **Actions**, reexecute o workflow **Publicar Vitrine Livre no GitHub Pages** caso seja necessário.
-4. Verifique `https://perabru.github.io/shopee-panel/`.
+1. Abra https://console.firebase.google.com/project/gahepatama-4707c/database
+2. Selecione **Realtime Database** (não Firestore Database).
+3. Abra a aba **Regras / Rules**.
+4. Substitua as regras atuais pelo conteúdo integral de **[database.rules.json](./database.rules.json)**.
+5. Clique em **Publicar**.
 
-O GitHub App conectado ao ChatGPT não tem permissão para ativar Pages no repositório, então essa etapa precisa ser feita no próprio GitHub. O workflow publica **apenas** `index.html`, `styles.css`, `app.js`, `icon.svg` e `manifest.webmanifest`; backend/segredos não vão para o Pages.
+As regras dão leitura pública **apenas** a `/shopeePanel/v1/publicShops` e a `/shopeePanel/v1/publicProducts/{uid}` das lojas públicas; escrita somente ao dono autenticado no UID correspondente; relatórios e status da API só podem ser lidos pelo dono, e segredos de afiliados nunca podem ser lidos ou escritos no navegador.
 
-### 2. Firebase Authentication / Firestore
+**Atenção:** todos os dados deste projeto ficam isolados em `shopeePanel/v1`. Não use `{ ".read":true, ".write":true }` em produção. Se existir algum outro aplicativo usando este mesmo Realtime Database, revise suas regras antigas e una as permissões antes de publicar: substituir todas as regras pode bloquear os dados desse outro aplicativo. O código da Vitrine Livre não necessita de permissão de leitura sobre dados de outros sistemas.
 
-O código já usa o projeto Firebase fornecido: `gahepatama-4707c`. A configuração `apiKey` no front-end é o identificador público do Firebase, **não é o segredo da API Shopee**.
-
-1. Console: https://console.firebase.google.com/project/gahepatama-4707c/overview
-2. Em **Authentication → Sign-in method**, habilite **Google** e configure o e-mail de suporte solicitado pelo Firebase.
-3. Em **Authentication → Settings → Authorized domains**, inclua `perabru.github.io`.
-4. Em **Firestore Database**, crie o banco no modo de produção na região adequada.
-5. Faça deploy das regras fornecidas no arquivo `firestore.rules`, a partir da CLI abaixo.
-
-### 3. Firebase Cloud Functions e chave de criptografia
-
-As Functions e o Secret Manager podem exigir o plano **Blaze** do Firebase, com faturamento habilitado. Um site apenas com GitHub Pages não pode executar chamadas assinadas à API Shopee sem expor os segredos.
-
-No terminal do computador com Node.js instalado:
+Você também pode instalar o Firebase CLI e, estando na pasta deste repositório, executar:
 
 ```bash
 npm install -g firebase-tools
 firebase login
-# entre na pasta clonada deste repositório
+firebase use gahepatama-4707c
+firebase deploy --only database --project gahepatama-4707c
+```
+
+`firebase.json` agora referencia `database.rules.json`, não `firestore.rules`.
+
+## Habilitar login Google
+
+1. https://console.firebase.google.com/project/gahepatama-4707c/authentication/providers
+2. Habilite **Google** em Sign-in method; escolha o e-mail de suporte.
+3. Em **Authentication → Configurações → Domínios autorizados**, adicione `perabru.github.io`.
+4. Entre em https://perabru.github.io/shopee-panel/ e clique em **Entrar com Google**.
+
+Se aparecer **PERMISSION_DENIED** após o login, publique as regras do Realtime Database. Se aparecer **auth/unauthorized-domain**, habilite o domínio no Authentication. Nenhum dos dois erros é resolvido abrindo Firestore.
+
+## Como publicar produtos agora
+
+1. Entre com Google. A vitrine será criada automaticamente no Realtime Database.
+2. Abra **Adicionar por link**.
+3. No portal oficial de afiliados Shopee, gere seu próprio link de afiliado para o produto ou loja.
+4. Informe **nome**, **link original** da Shopee e **seu link de afiliado convertido**; imagem, categoria e preço são opcionais.
+5. Clique em **Publicar na minha vitrine**; o produto ficará disponível em seu link público. Compras são concluídas no site/aplicativo da Shopee.
+
+**Não** é possível criar um link de afiliado válido a partir de um link comum apenas acrescentando parâmetros no navegador. Links manuais só geram atribuição se tiverem sido convertidos de verdade no programa Shopee, pelo próprio afiliado.
+
+## Recursos avançados: API Shopee (opcionais)
+
+A pesquisa de ofertas dentro do painel, geração *automática* de links e a consulta de comissões reais exigem **Cloud Functions e a Open API de Afiliados Shopee**. O backend `functions/index.js` foi migrado para `admin.database()` e grava em:
+
+- `shopeePanel/v1/affiliateSecrets/{uid}` — App ID/Secret criptografados com AES-256-GCM, acesso exclusivamente do Admin SDK.
+- `shopeePanel/v1/affiliateStatus/{uid}` — indicador privado de integração conectada.
+- `shopeePanel/v1/affiliateReports/{uid}` — estimativas das conversões consultadas.
+- `shopeePanel/v1/publicProducts/{uid}` — produtos publicados com link gerado pela API.
+
+Implantação do backend exige acesso administrativo ao projeto Firebase, **plano Blaze com faturamento habilitado**, e uma credencial da Open API de Afiliados Shopee válida:
+
+```bash
+npm install -g firebase-tools
+firebase login
 cd shopee-panel
 npm --prefix functions install
 firebase use gahepatama-4707c
+# Gere uma chave aleatória de 32 bytes, em hexadecimal:
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
-# copie o valor gerado e cole QUANDO O COMANDO ABAIXO SOLICITAR (nunca no repositório):
+# Guarde a chave gerada em local seguro e cole-a na solicitação abaixo:
 firebase functions:secrets:set AFFILIATE_ENCRYPTION_KEY
-firebase deploy --only functions,firestore:rules --project gahepatama-4707c
+firebase deploy --only functions,database --project gahepatama-4707c
 ```
 
-Guarde a chave de criptografia original em cofre seguro. Rotacioná-la sem migrar os registros impede a descriptografia das credenciais já salvas. As regras do Firestore bloqueiam qualquer escrita direta do navegador; os registros são geridos exclusivamente pelas Functions.
+**Não coloque App Secret nem chave de criptografia nos arquivos HTML/JavaScript, no repositório GitHub ou nas regras públicas.** O `functions/index.js` precisa ser implantado pelo dono do projeto; um deploy de GitHub Pages não executa as Cloud Functions.
 
-### 4. Conexão individual com a Shopee
+Para credenciais, verifique a disponibilidade de App ID e Secret na área da Shopee: https://affiliate.shopee.com.br/open_api. O login Google não conecta automaticamente a conta de afiliado Shopee, mesmo quando os e-mails são iguais.
 
-1. O afiliado precisa ter conta ativa no Programa de Afiliados Shopee.
-2. Acesse o [portal de afiliados](https://affiliate.shopee.com.br/open_api) e obtenha **App ID** e **Secret da Open API de Afiliados** conforme disponibilidade na conta. **Nunca solicite ou use a senha de login Shopee.**
-3. No site, entre com Google → **Configurações → Conectar programa de afiliados**.
-4. O backend faz uma chamada real assinada para validar as credenciais antes de salvá-las criptografadas.
-5. Agora a busca, geração automática de links e consultas de comissões passam a ser autorizadas em nome do **afiliado conectado**.
+## Como os dados são organizados
 
-**Não é possível associar automaticamente uma conta Shopee ao Google só pelo e-mail igual.** São sistemas de autenticação diferentes e não há credenciais de API na configuração Firebase enviada.
+| Caminho | O que armazena | Acesso do cliente |
+|---|---|---|
+| `shopeePanel/v1/shops/{uid}` | Informações da vitrine, inclusive privada | Apenas o proprietário |
+| `shopeePanel/v1/publicShops/{uid}` | Vitrines marcadas como públicas | Leitura pública; escrita do dono |
+| `shopeePanel/v1/publicProducts/{uid}/{id}` | Produtos e links publicados | Leitura dos visitantes se a loja for pública; escrita do dono |
+| `shopeePanel/v1/affiliateStatus/{uid}` | Estado da conexão Shopee | Leitura do dono; escrita do backend |
+| `shopeePanel/v1/affiliateReports/{uid}` | Comissões consultadas na API | Leitura do dono; escrita do backend |
+| `shopeePanel/v1/affiliateSecrets/{uid}` | Credenciais criptografadas da Shopee | Sem acesso pelo navegador |
 
-## Fluxo das vitrines
+**Observação importante sobre privacidade:** o Firebase Realtime Database só é seguro se as regras acima estiverem publicadas. Se o banco já for compartilhado com outros sistemas, avalie o efeito da substituição das regras antes de aplicar.
 
-- Ao autenticar, o Firebase Auth fornece o UID e a Function `ensureStore` cria a vitrine pública vazia.
-- Os dados públicos ficam em `shops/{uid}` e `shops/{uid}/products/{productId}`.
-- Ao pesquisar, a Function `searchOffers` consulta a API usando as credenciais **daquele UID**.
-- Ao publicar, `publishProduct` chama `generateShortLink` e armazena `affiliateUrl` e origem; sem API requer link próprio previamente convertido no portal.
-- Os clientes veem a página `/#/loja/{uid}` sem login e clicam em `Comprar na Shopee` (HTTPS, com `rel=sponsored`).
-- O painel privado consulta `conversionReport` sob demanda e identifica conversões que tenham SubId `shopeepanel` quando disponível.
+## Status de implantação
 
-## Sobre os valores no painel
+- Arquivos front-end e backend estão no GitHub.
+- O workflow `.github/workflows/pages.yml` publica apenas os arquivos estáticos do site.
+- **A publicação das regras no Firebase e das Cloud Functions não acontece automaticamente por este workflow.** O operador do projeto Firebase deve executar as etapas acima.
+- Nenhum teste com uma conta real da Shopee pode ser afirmado sem credenciais válidas e um ambiente Firebase configurado.
 
-O relatório mostrado é uma estimativa a partir de **conversões**, não um saldo de conta ou quantia disponível para retirada. Pedidos podem ser cancelados; a validação e os pagamentos dependem da Shopee. O relatório tem limite de paginação: se a consulta não puder percorrer todos os registros, o painel avisa que está parcial. Links adicionados manualmente sem os SubIds podem não aparecer como comissões da vitrine.
-
-## Referência Shopee fornecida
-
-Exemplo visual: https://shopee.com.br/q63ifc2_ce — endereço externo informado pelo usuário. Não foi associado automaticamente à titularidade de nenhuma conta; não é feita extração em massa nem cópia de anúncios dessa loja.
-
-## Segurança e privacidade
-
-- Cada proprietário administra apenas sua vitrine pelo Firebase UID validado no backend.
-- A API Secret de cada usuário só é recebida em função HTTPS autenticada e armazenada com AES-256-GCM em `affiliateSecrets/{uid}`, com leituras negadas por regras públicas.
-- O código do front-end nunca contém segredos de afiliados.
-- `originUrl` e `affiliateUrl` somente podem ser URLs HTTPS em domínios Shopee permitidos; o sistema não aceita links arbitrários que redirecionem visitantes a sites desconhecidos.
-- Compradores não fazem login Shopee pelo Vitrine Livre; são redirecionados ao site oficial Shopee.
-- Imagens externas HTTPS são exibidas com política `no-referrer`; compradores devem verificar preços, cupons e estoque na Shopee.
-- Para operação com muitos afiliados, avalie reforços de App Check, limites por usuário, políticas de privacidade, moderação de produtos e mecanismos de denúncia antes de divulgar amplamente.
-
-## Referências
-
-- [Central de Ajuda da Shopee — Como gerar links de afiliado](https://help.shopee.com.br/portal/10/article/128461-Como-gerar-links-de-produtos-ou-lojas)
-- [Shopee Affiliate Open API Explorer](https://open-api.affiliate.shopee.com.br/explorer/v2) (acesso e endpoints dependem da conta)
-- [Guia comunitário não oficial sobre assinatura e consultas](https://www.affiliateshopee.com.br/documentacao)
-
-## Estrutura
-
-```text
-index.html                 Interface pública e login
-styles.css                 Layout desktop/mobile
-app.js                     Firebase Auth, vitrine, painel, busca, publicação
-icon.svg                   Ícone original (não usa logotipo oficial Shopee)
-manifest.webmanifest       Instalação PWA
-firestore.rules            Acesso público/restrito por usuário
-firebase.json / .firebaserc
-functions/index.js         Funções autenticadas de afiliados e gestão
-functions/affiliate-core.js  Validações, assinatura, criptografia e GraphQL
-tests/affiliate-core.test.cjs Testes automatizados
-.github/workflows/pages.yml  Publicação estática no GitHub Pages
-```
-
-Teste local:
+## Verificação local
 
 ```bash
-npm --prefix functions test
-# front-end: servidor HTTP local, mas habilite o domínio local no Firebase Auth para testar login.
-python -m http.server 8080
+node --check app.js
+node --check functions/index.js
+node --test tests/*.test.cjs
 ```
 
-**Status:** repositório e código podem ser publicados no GitHub, mas a operação real exige as etapas de configuração da Shopee Open API e implantação do Firebase acima. Nenhuma integração real foi testada sem credenciais.
+## Referência Shopee
+
+Exemplo: https://shopee.com.br/q63ifc2_ce. A plataforma não afirma titularidade da loja, nem copia seu catálogo sem permissão da Shopee.

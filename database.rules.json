@@ -1,0 +1,148 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "shopeePanel": {
+      "v1": {
+        ".read": false,
+        ".write": false,
+        "shops": {
+          "$uid": {
+            ".read": "auth != null && auth.uid === $uid",
+            ".write": "auth != null && auth.uid === $uid",
+            ".validate": "newData.hasChildren(['ownerUid','name','description','slug','referenceUrl','isPublic','productCount','createdAt','updatedAt'])",
+            "ownerUid": {
+              ".validate": "newData.isString() && newData.val() === $uid"
+            },
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 70"
+            },
+            "description": {
+              ".validate": "newData.isString() && newData.val().length <= 240"
+            },
+            "slug": {
+              ".validate": "newData.isString() && newData.val().length <= 80"
+            },
+            "referenceUrl": {
+              ".validate": "newData.isString() && (newData.val() === '' || (newData.isString() && newData.val().length <= 1200 && newData.val().matches(/^https:\\/\\/([a-z0-9-]+\\.)*(shopee\\.com\\.br|shopee\\.com|shp\\.ee|shope\\.ee)(\\/|\\?|$)/)))"
+            },
+            "isPublic": {
+              ".validate": "newData.isBoolean()"
+            },
+            "productCount": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100000"
+            },
+            "createdAt": {
+              ".validate": "newData.isNumber() && newData.val() > 0"
+            },
+            "updatedAt": {
+              ".validate": "newData.isNumber() && newData.val() > 0"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        },
+        "publicShops": {
+          ".read": true,
+          ".indexOn": [
+            "name",
+            "updatedAt"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid",
+            ".validate": "newData.hasChildren(['ownerUid','name','description','slug','referenceUrl','isPublic','productCount','createdAt','updatedAt']) && newData.child('isPublic').val() === true",
+            "ownerUid": {
+              ".validate": "newData.isString() && newData.val() === $uid"
+            },
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 70"
+            },
+            "description": {
+              ".validate": "newData.isString() && newData.val().length <= 240"
+            },
+            "slug": {
+              ".validate": "newData.isString() && newData.val().length <= 80"
+            },
+            "referenceUrl": {
+              ".validate": "newData.isString() && (newData.val() === '' || (newData.isString() && newData.val().length <= 1200 && newData.val().matches(/^https:\\/\\/([a-z0-9-]+\\.)*(shopee\\.com\\.br|shopee\\.com|shp\\.ee|shope\\.ee)(\\/|\\?|$)/)))"
+            },
+            "isPublic": {
+              ".validate": "newData.val() === true"
+            },
+            "productCount": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100000"
+            },
+            "createdAt": {
+              ".validate": "newData.isNumber() && newData.val() > 0"
+            },
+            "updatedAt": {
+              ".validate": "newData.isNumber() && newData.val() > 0"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        },
+        "publicProducts": {
+          "$uid": {
+            ".read": "auth != null && auth.uid === $uid || root.child('shopeePanel/v1/publicShops').child($uid).exists()",
+            "$productId": {
+              ".write": "auth != null && auth.uid === $uid && root.child('shopeePanel/v1/shops').child($uid).exists()",
+              ".validate": "newData.hasChildren(['name','description','category','originalUrl','affiliateUrl','image','trackingSource','published','createdAt'])",
+              "name": {
+                ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 180"
+              },
+              "description": {
+                ".validate": "newData.isString() && newData.val().length <= 350"
+              },
+              "category": {
+                ".validate": "newData.isString() && newData.val().length <= 30"
+              },
+              "originalUrl": {
+                ".validate": "newData.isString() && newData.val().length <= 1200 && newData.val().matches(/^https:\\/\\/([a-z0-9-]+\\.)*(shopee\\.com\\.br|shopee\\.com|shp\\.ee|shope\\.ee)(\\/|\\?|$)/)"
+              },
+              "affiliateUrl": {
+                ".validate": "newData.isString() && newData.val().length <= 1200 && newData.val().matches(/^https:\\/\\/([a-z0-9-]+\\.)*(shopee\\.com\\.br|shopee\\.com|shp\\.ee|shope\\.ee)(\\/|\\?|$)/)"
+              },
+              "image": {
+                ".validate": "newData.isString() && newData.val().length <= 1400 && (newData.val() === '' || newData.val().matches(/^https:\\/\\/[a-zA-Z0-9.-]+(\\/|\\?|$)/))"
+              },
+              "price": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100000000"
+              },
+              "trackingSource": {
+                ".validate": "newData.val() === 'manual'"
+              },
+              "published": {
+                ".validate": "newData.val() === true"
+              },
+              "createdAt": {
+                ".validate": "newData.isNumber() && newData.val() > 0"
+              },
+              "$other": {
+                ".validate": false
+              }
+            }
+          }
+        },
+        "affiliateStatus": {
+          "$uid": {
+            ".read": "auth != null && auth.uid === $uid",
+            ".write": false
+          }
+        },
+        "affiliateReports": {
+          "$uid": {
+            ".read": "auth != null && auth.uid === $uid",
+            ".write": false
+          }
+        },
+        "affiliateSecrets": {
+          ".read": false,
+          ".write": false
+        }
+      }
+    }
+  }
+}
