@@ -5,14 +5,22 @@
 
 Crie uma vitrine pública de produtos da Shopee, usando seus próprios links de afiliado. Os visitantes compram **diretamente na Shopee**. Esta plataforma é independente, não é uma cópia oficial da Shopee e não processa compras.
 
-## Comece sem complicação
+## Crie e compartilhe sua vitrine em poucos cliques
 
-1. Abra o site e clique em **Entrar com Google**. A vitrine é criada automaticamente.
-2. No portal da Shopee Afiliados, gere seu **link de afiliado** de um produto ou loja. O guia oficial é [Como gerar seus links](https://help.shopee.com.br/portal/10/article/128461-Como-gerar-links-de-produtos-ou-lojas). No aplicativo procure **Afiliados → Conta → Link de Conversão**; no computador, **Portal de Afiliados → Oferta → Link Personalizado**.
-3. Volte ao Shopee Panel em **Adicionar produto**. Informe apenas **nome** e **seu link de afiliado**. Imagem, preço e descrição são opcionais.
-4. Copie **Meu link público** no painel e compartilhe onde quiser. Visitantes não precisam entrar com Google.
+1. Entre no [site](https://perabru.github.io/shopee-panel/) com **Google**. A vitrine é criada automaticamente no Firebase Realtime Database.
+2. Na Shopee Afiliados, escolha um produto e **gere seu link de afiliado**. [Veja o passo a passo oficial](https://help.shopee.com.br/portal/10/article/128461-Como-gerar-seus-links-de-Afiliado-ou-ID-de-produto-para-compartilhar).
+3. No Shopee Panel, abra **Adicionar produto** e **cole o link**. A plataforma tenta preencher automaticamente **foto e título**, com uma prévia. Você pode mudar o título e, se necessário, informar a imagem manualmente em *Ajustar foto, preço ou categoria*.
+4. Clique em **Publicar produto**. A plataforma abre sua vitrine para você conferir.
+5. Use **Compartilhar**, **Copiar link** ou **WhatsApp**. Qualquer visitante pode visualizar a vitrine sem login e comprar diretamente na Shopee.
 
-**Pronto. Para usar a vitrine básica você não precisa do ID da loja, App ID, Secret ou Cloud Functions.** O link precisa ter sido convertido de verdade pela Shopee em sua conta de afiliado: um link comum não garante comissão e o Shopee Panel não adiciona parâmetros fictícios para simular rastreamento.
+**O ID da loja não é necessário** para publicar links de afiliado já gerados. O link deve ter sido convertido pela Shopee: links comuns não passam a gerar comissão por serem cadastrados aqui. O Shopee Panel não recebe pagamentos.
+
+### Como funciona a imagem automática
+
+- Com **App ID + Secret da Open API de Afiliados conectados**, a Cloud Function opcional `previewProduct` busca **nome, imagem e preço** pelo `itemId` de uma URL oficial de produto, quando essa oferta consta no catálogo acessível à conta. Links curtos que não expõem o `itemId` podem não ser identificados pela API.
+- Sem integração, a página **tenta uma prévia pública do link** usando o serviço [Microlink](https://microlink.io/api), que pode retornar o título e a imagem públicos. Essa consulta **envia a URL informada ao serviço de prévia**, não envia seu login ou credenciais. O acesso gratuito tem limites e alguns links da Shopee bloqueiam a leitura ou não exibem imagem.
+- **Não há garantia de extração da foto** de toda URL. Quando a prévia não estiver disponível, a imagem ficará em branco com um ícone; informe manualmente um endereço HTTPS da foto, caso queira. O título permanece editável e obrigatório.
+- O sistema **não cria links de afiliado automaticamente sem a API autorizada**. Para link manual, redireciona para o **exato link informado** pelo usuário, sem acrescentar tracking artificial.
 
 ## Onde encontrar o ID da loja Shopee?
 
@@ -49,12 +57,12 @@ O front-end já usa a configuração pública informada do projeto `gahepatama-4
 
 - Login Google e vitrine criada automaticamente, após as regras do banco e Authentication estarem ativos.
 - Nome e descrição da vitrine, link de referência Shopee e botão para deixá-la pública/privada.
-- Publicação de produtos com links de afiliado previamente convertidos pelo próprio usuário.
-- Vitrine aberta a qualquer visitante, pesquisa interna e links **Comprar na Shopee**.
+- Publicação de produtos com links de afiliado previamente convertidos pelo próprio usuário, com prévia automática de imagem/título quando o serviço externo permitir.
+- Vitrine pública com visual de catálogo, busca interna, botão de compartilhamento nativo, WhatsApp e links **Comprar na Shopee**.
 
 ### Recursos avançados, opcionais
 
-**Buscar produtos diretamente pela API dentro do Shopee Panel, gerar links automaticamente e visualizar comissões reais** exige conta de afiliado com **App ID e Secret da Open API da Shopee** e o deploy do backend Firebase Functions. Essas funções não são ativadas pelo login Google, pelo ID de loja ou pelo Realtime Database sozinho.
+**Buscar produtos e prévias diretamente pela API dentro do Shopee Panel, gerar links automaticamente e visualizar comissões reais** exige conta de afiliado com **App ID e Secret da Open API da Shopee** e o deploy do backend Firebase Functions. Essas funções não são ativadas pelo login Google, pelo ID de loja ou pelo Realtime Database sozinho.
 
 No portal [Shopee Afiliados — Open API](https://affiliate.shopee.com.br/open_api), verifique se seu cadastro tem acesso e obtenha o App ID e o Secret. Esses dados devem ser inseridos apenas no formulário autenticado da seção **Minha loja → Integração avançada**, depois de ativar o backend. **Não exponha credenciais no GitHub, no front-end ou nas regras do Firebase.**
 
@@ -77,6 +85,6 @@ firebase deploy --only functions --project gahepatama-4707c
 
 ## Arquivos principais
 
-`index.html`, `styles.css` e `app.js` formam o site. `database.rules.json` são as regras de segurança do Realtime Database. `functions/` guarda a integração opcional assinada com a API da Shopee. `tests/` contém verificações automatizadas; execute `node --test tests/*.test.cjs` e `node --check app.js`.
+`index.html`, `styles.css` e `app.js` formam o site. `database.rules.json` são as regras de segurança do Realtime Database. `functions/` guarda a integração opcional assinada com a API da Shopee, incluindo `previewProduct` por `itemId`. `tests/` contém verificações automatizadas; execute `node --test tests/*.test.cjs` e `node --check app.js`.
 
 O código armazena vitrines em `shopeePanel/v1/shops`, referências públicas em `shopeePanel/v1/publicShops`, produtos em `shopeePanel/v1/publicProducts`. As credenciais e relatórios ficam isolados por usuário e são escritos apenas pelo backend seguro. Nunca publique senhas.

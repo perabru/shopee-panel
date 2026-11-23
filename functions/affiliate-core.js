@@ -61,6 +61,24 @@ function gqlString(value) {return JSON.stringify(String(value));}
 function queryOffers(keyword, page=1, limit=16) {
   return `{productOfferV2(keyword:${gqlString(keyword)},sortType:1,page:${page},limit:${limit}){nodes{itemId productName productLink offerLink imageUrl priceMin priceMax priceDiscountRate sales ratingStar commissionRate shopId shopName}pageInfo{page limit hasNextPage}}}`;
 }
+function productIdsFromUrl(link){
+ const url=new URL(shopeeUrl(link));
+ const path=url.pathname;
+ let match=path.match(/\/product\/(\d{1,18})\/(\d{1,18})(?:\/|$)/i)
+    || path.match(/-i\.(\d{1,18})\.(\d{1,18})(?:\/|$)/i)
+    || path.match(/\/opaanlp\/(\d{1,18})\/(\d{1,18})(?:\/|$)/i);
+ if(!match){
+  const shopId=url.searchParams.get('shopid')||url.searchParams.get('shopId');
+  const itemId=url.searchParams.get('itemid')||url.searchParams.get('itemId');
+  if(shopId&&itemId)match=[null,shopId,itemId];
+ }
+ if(!match||!/^[0-9]{1,18}$/.test(match[1])||!/^[0-9]{1,18}$/.test(match[2]))return null;
+ return {shopId:match[1],itemId:match[2]};
+}
+function queryOfferByItemId(itemId){
+ if(!/^[0-9]{1,18}$/.test(String(itemId)))throw new Error('ID do produto Shopee inválido.');
+ return `{productOfferV2(itemId:${itemId},page:1,limit:2){nodes{itemId productName productLink offerLink imageUrl priceMin priceMax priceDiscountRate sales ratingStar commissionRate shopId shopName}pageInfo{page limit hasNextPage}}}`;
+}
 function queryShortLink(url, subIds=[]) {
   return `mutation{generateShortLink(input:{originUrl:${gqlString(shopeeUrl(url))},subIds:[${subIds.map(gqlString).join(',')}]}){shortLink}}`;
 }
@@ -109,4 +127,4 @@ function summarizeConversions(nodes,limitReached=false,uidMarker='') {
   }
   return {total,completed,pending,cancelled,siteTotal,orders,conversions:seen.size,partial:!!limitReached};
 }
-module.exports={AFFILIATE_API,CATEGORIES,shopeeUrl,imageUrl,field,currencyValue,category,slugify,signature,signedHeaders,encrypt,decrypt,gqlString,queryOffers,queryShortLink,queryReport,callAffiliate,mapOffer,summarizeConversions};
+module.exports={AFFILIATE_API,CATEGORIES,shopeeUrl,imageUrl,field,currencyValue,category,slugify,signature,signedHeaders,encrypt,decrypt,gqlString,queryOffers,productIdsFromUrl,queryOfferByItemId,queryShortLink,queryReport,callAffiliate,mapOffer,summarizeConversions};

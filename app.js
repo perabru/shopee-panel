@@ -87,6 +87,118 @@ async function saveManualProduct(input){
  return node.key;
 }
 
+// Descoberta de prévia: a Shopee pode bloquear prévias externas. Nunca inventamos imagens.
+const previewCache=new Map();
+let previewTimer=null;
+let previewSequence=0;
+function guessNameFromLink(link){
+ if(!validShopee(link))return '';
+ try{
+  const url=new URL(link);
+  let slug=decodeURIComponent(url.pathname.split('/').filter(Boolean).pop()||'');
+  slug=slug.replace(/-i\.\d+\.\d+$/i,'').replace(/^product$/i,'');
+  if(!slug||/^\d+$/.test(slug)||/^(?:[a-z0-9]{1,12})$/i.test(slug)&&!slug.includes('-'))return '';
+  const words=slug.replace(/[-_]+/g,' ').replace(/[.]+/g,' ').replace(/\s+/g,' ').trim();
+  return words.length>8?safeText(words,180):'';
+ }catch{return '';}
+}
+function previewTitle(value){
+ const title=safeText(value,180).replace(/\s*([|–-])\s*Shopee(?: Brasil)?\s*$/i,'').trim();
+ if(!title||/^(Shopee|Login|Página não encontrada|Just a moment|Access denied)$/i.test(title))return '';
+ return title;
+}
+async function lookupProductPreview(link){
+ if(!validShopee(link))throw new Error('Cole um endereço HTTPS válido da Shopee.');
+ if(previewCache.has(link))return previewCache.get(link);
+ if(state.connected){
+  try{
+   const result=await call('previewProduct',{url:link});
+   const offer=result?.offer;
+   if(offer&&(safeImage(offer.image)||previewTitle(offer.name))){
+    const info={name:previewTitle(offer.name),image:safeImage(offer.image),price:offer.price,source:'API oficial Shopee'};
+    previewCache.set(link,info);return info;
+   }
+  }catch(error){console.info('Prévia pela API indisponível:',errText(error));}
+ }
+ // Prévia pública opcional (serviço terceirizado, sem credenciais pessoais).
+ // A Shopee pode bloquear este acesso e o serviço gratuito possui limite de uso.
+ const endpoint=new URL('https://api.microlink.io/');
+ endpoint.searchParams.set('url',link);
+ const controller=new AbortController();
+ const timeout=setTimeout(()=>controller.abort(),9500);
+ try{
+  const response=await fetch(endpoint.toString(),{headers:{'Accept':'application/json'},signal:controller.signal,referrerPolicy:'no-referrer'});
+  if(!response.ok)throw new Error('Prévia não disponível.');
+  const payload=await response.json();
+  if(payload?.status!=='success'||!payload?.data)throw new Error('A página da Shopee não liberou seus dados.');
+  const meta=payload.data;
+  if(meta.url&&!validShopee(meta.url))throw new Error('O link redirecionou para uma página não reconhecida da Shopee.');
+  const image=safeImage(typeof meta.image==='string'?meta.image:meta.image?.url);
+  const name=previewTitle(meta.title);
+  if(!image&&!name)throw new Error('A página não informou imagem ou título.');
+  const info={name,image,source:'prévia pública do link'};
+  previewCache.set(link,info);return info;
+ }finally{clearTimeout(timeout);}
+}
+function fillProductPreview(form,info){
+ const title=form.querySelector('[name="name"]');
+ const image=form.querySelector('[name="image"]');
+ const price=form.querySelector('[name="price"]');
+ const suggested=info.name||guessNameFromLink(form.elements.affiliateUrl.value.trim());
+ if(title&&suggested&&(!title.value||title.dataset.autofilled==='1')){
+  title.value=suggested;title.dataset.autofilled='1';
+ }
+ if(image&&info.image&&(!image.value||image.dataset.autofilled==='1')){
+  image.value=info.image;image.dataset.autofilled='1';
+ }
+ if(price&&info.price!=null&&!price.value&&Number.isFinite(Number(info.price))){price.value=Number(info.price).toFixed(2);price.dataset.autofilled='1';}
+ renderPreviewCard(form,info.source);
+}
+function renderPreviewCard(form,source=''){
+ const card=form.querySelector('[data-preview-card]');
+ if(!card)return;
+ const title=safeText(form.querySelector('[name="name"]')?.value,180);
+ const image=safeImage(form.querySelector('[name="image"]')?.value);
+ const category=String(form.querySelector('[name="category"]')?.value||'Outros');
+ card.innerHTML=`<div class="mini-preview-image">${image?`<img src="${h(image)}" alt="Imagem encontrada do produto" loading="lazy" referrerpolicy="no-referrer">`:`<span aria-hidden="true">${categoryIcon(category)}</span>`}</div><div class="mini-preview-text"><span>PRÉVIA DA VITRINE ${source?'· '+h(source):''}</span><strong>${h(title||'Seu produto aparecerá aqui')}</strong><small>${image?'✓ Imagem encontrada — você pode alterá-la abaixo.':'A imagem aparece aqui assim que for encontrada.'}</small></div>`;
+ const photo=card.querySelector('img');
+ if(photo)photo.onerror=()=>{photo.remove();const ph=card.querySelector('.mini-preview-image');if(ph)ph.textContent='▣';};
+}
+async function resolveProductPreview(form,url,seq){
+ const status=form.querySelector('[data-preview-status]');
+ if(status){status.textContent='Buscando foto e título do produto…';status.dataset.status='loading';}
+ try{
+  const info=await lookupProductPreview(url);
+  if(seq!==previewSequence||!form.isConnected||form.elements.affiliateUrl.value.trim()!==url)return;
+  fillProductPreview(form,info);
+  if(status){status.textContent=info.image?'Imagem encontrada! Revise e publique.':'Título encontrado; esta página não disponibilizou uma imagem.';status.dataset.status='success';}
+ }catch(error){
+  if(seq!==previewSequence||!form.isConnected||form.elements.affiliateUrl.value.trim()!==url)return;
+  fillProductPreview(form,{name:guessNameFromLink(url),image:'',source:''});
+  if(status){status.textContent='Não foi possível obter a imagem automaticamente. Você pode colar a URL da foto em “Ajustar detalhes”.';status.dataset.status='warning';}
+ }
+}
+function scheduleProductPreview(form,immediate=false){
+ clearTimeout(previewTimer);
+ const seq=++previewSequence;
+ const url=form.querySelector('[name="affiliateUrl"]')?.value.trim()||'';
+ const status=form.querySelector('[data-preview-status]');
+ if(form.dataset.previewUrl!==url){
+  for(const name of ['name','image','price']){const input=form.querySelector('[name="'+name+'"]');if(input?.dataset.autofilled==='1'){input.value='';delete input.dataset.autofilled;}}
+  form.dataset.previewUrl=url;renderPreviewCard(form);
+ }
+ if(!url){if(status){status.textContent='Cole um link para tentar encontrar a imagem automaticamente.';status.dataset.status='idle';}return;}
+ if(!validShopee(url)){
+  if(status){status.textContent='Use um link HTTPS válido da Shopee ou do encurtador oficial.';status.dataset.status='warning';}return;
+ }
+ fillProductPreview(form,{name:guessNameFromLink(url),image:'',source:''});
+ previewTimer=setTimeout(()=>resolveProductPreview(form,url,seq),immediate?0:650);
+}
+function shareText(name,url){return `Olha essa seleção de produtos! 🛍️\n${name}\n${url}`;}
+function shareButtons(uid,name){
+ const url=shopUrl(uid),encoded=encodeURIComponent(shareText(name,url));
+ return `<div class="share-buttons"><button class="btn btn-white btn-sm" type="button" data-action="copy" data-url="${h(url)}">⧉ Copiar link</button><a class="btn btn-share-whatsapp btn-sm" href="https://wa.me/?text=${encoded}" target="_blank" rel="noopener noreferrer">WhatsApp ↗</a><button class="btn btn-orange btn-sm" type="button" data-action="share-shop" data-url="${h(url)}" data-name="${h(name)}">↗ Compartilhar</button></div>`;
+}
 function currentPath(){return location.hash.replace(/^#\/?/,'')||'';}
 function parseRoute(){const parts=currentPath().split('/').filter(Boolean);return {route:parts[0]||'home',id:parts[1]||''};}
 function shopUrl(uid){return new URL('./#/loja/'+encodeURIComponent(uid),location.href.split('#')[0]).href;}
@@ -95,7 +207,7 @@ function categoryIcon(cat){return ({'Casa':'🏠','Eletrônicos':'⌁','Moda':'�
 function alertBox(type,text){return `<div class="alert ${type}">${text}</div>`;}
 function loading(message='Carregando...'){return `<div class="loading-screen"><span class="loader"></span><p>${h(message)}</p></div>`;}
 function empty(icon,title,subtitle,action=''){return `<div class="empty"><div class="empty-icon">${icon}</div><h3>${h(title)}</h3><p>${h(subtitle)}</p>${action}</div>`;}
-function productPhoto(p){const src=safeImage(p.image);return `<div class="product-photo">${src?`<img src="${h(src)}" alt="${h(p.name)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:`<div class="placeholder">${categoryIcon(p.category)}</div>`}</div>`;}
+function productPhoto(p){const src=safeImage(p.image);return `<div class="product-photo"><div class="placeholder">${categoryIcon(p.category)}</div>${src?`<img src="${h(src)}" alt="${h(p.name)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`:''}<span class="photo-label">Escolha especial</span></div>`;}
 function productCard(p,admin=false){const link=validShopee(p.affiliateUrl)?p.affiliateUrl:'';const price=p.price!=null?`<div class="product-price">${money(p.price)}</div>`:`<div class="product-price muted">Consulte o preço na Shopee</div>`;return `<article class="product-card">${productPhoto(p)}<div class="product-card-body"><span class="pill orange" style="align-self:start;margin-bottom:9px">${h(p.category||'Outros')}</span><strong class="product-card-title">${h(p.name)}</strong><div class="product-card-meta">${h(p.description||'Oferta selecionada para esta vitrine.')}</div>${price}<div class="product-card-actions">${link?`<a href="${h(link)}" class="btn btn-orange btn-sm" target="_blank" rel="noopener noreferrer sponsored">Comprar na Shopee ↗</a>`:`<button class="btn btn-white btn-sm" disabled>Link indisponível</button>`}${admin?`<button class="btn btn-white btn-sm btn-icon" data-action="remove-product" data-id="${h(p.id)}" title="Excluir produto" aria-label="Excluir ${h(p.name)}">✕</button>`:''}</div><div class="product-note">Compra e pagamento finalizados na Shopee. Preço sujeito a alterações.</div></div></article>`;}
 function offerCard(o,index){return `<article class="product-card">${productPhoto({...o,category:'Outros'})}<div class="product-card-body"><strong class="product-card-title">${h(o.name)}</strong><div class="product-card-meta">${h(o.shopName||'Loja Shopee')} ${o.rating?`· ★ ${h(o.rating.toFixed(1))}`:''}</div>${o.price!=null?`<div class="product-price">${money(o.price)}</div>`:'<div class="product-price muted">Preço na Shopee</div>'}<div style="margin-top:6px"><span class="pill green">Comissão anunciada: ${h((o.commissionRate*100).toFixed(1))}%</span></div><div class="product-card-actions"><button class="btn btn-orange btn-sm" data-action="publish-offer" data-index="${index}">+ Adicionar à minha vitrine</button></div><div class="product-note">Estimativa de comissão da oferta, não receita confirmada.</div></div></article>`;}
 function renderTop(){const el=$('userActions');if(!state.authReady){el.innerHTML='<button class="btn btn-white btn-sm" disabled>Carregando...</button>';return;}if(!state.user){el.innerHTML='<button class="btn btn-orange" data-action="login"><span class="google-g" style="color:white;font-weight:800">G</span> Entrar com Google</button>';return;}const name=state.user.displayName||'Minha conta';el.innerHTML=`<div class="user-mini"><span class="avatar" title="${h(name)}">${h(initials(name))}</span><span class="username">${h(short(name.split(' ')[0]))}</span></div><a href="#/painel" class="btn btn-orange btn-sm">Meu painel</a>`;}
@@ -158,10 +270,31 @@ function how(){return `<section class="section"><div class="container" style="pa
  <div class="form-actions" style="margin:22px 0"><button class="btn btn-orange" data-action="start-store">Criar minha vitrine →</button><a class="btn btn-white" target="_blank" rel="noopener noreferrer" href="https://help.shopee.com.br/portal/10/article/128461-Como-gerar-links-de-produtos-ou-lojas">Como gerar links oficiais ↗</a></div>
  ${shopIdGuide()}
  </div></section>`;}
-function store(){const s=state.publicShop;if(state.loadingStore)return loading('Abrindo vitrine pública...');if(!s)return `<div class="container section">${empty('▢','Vitrine não encontrada','Esta loja não existe ou não está pública.',`<a href="#/" class="btn btn-orange">Voltar às vitrines</a>`)}</div>`;
+function store(){
+ const s=state.publicShop;
+ if(state.loadingStore)return loading('Preparando sua vitrine...');
+ if(!s)return `<div class="container section">${empty('▢','Vitrine não encontrada','Esta loja não existe ou não está pública.',`<a href="#/" class="btn btn-orange">Explorar vitrines</a>`)}</div>`;
  const own=state.user?.uid===s.ownerUid;
  const products=state.publicProducts.filter(p=>((state.category==='Tudo')||(p.category===state.category))&&(p.name+' '+(p.description||'')).toLowerCase().includes(state.storeQuery.toLowerCase()));
- return `<div class="container"><div class="shop-header"><div style="position:relative;z-index:1"><span class="eyebrow white">✦ Vitrine pública de afiliado</span><h1>${h(s.name)}</h1><p>${h(s.description||'Seleção de produtos com links de afiliado da Shopee.')}</p><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:17px"><span class="pill orange">${state.publicProducts.length} produtos</span>${s.referenceUrl&&validShopee(s.referenceUrl)?`<a class="btn btn-white btn-sm" target="_blank" rel="noopener noreferrer" href="${h(s.referenceUrl)}">Loja Shopee de referência ↗</a>`:''}</div></div><div class="shop-logo">${h(initials(s.name))}</div></div><div class="shop-controls"><div><h2>Produtos selecionados</h2><p class="result-count" style="margin-top:5px">${products.length} itens nesta seleção</p></div><div style="display:flex;gap:9px;flex-wrap:wrap"><button class="btn btn-white btn-sm" data-action="copy" data-url="${h(shopUrl(s.ownerUid))}">♧ Compartilhar loja</button>${own?'<a href="#/catalogo" class="btn btn-orange btn-sm">+ Adicionar produto</a>':''}</div></div><form class="searchbar" data-form="search-store" style="margin-bottom:20px"><span class="searchbar-icon">⌕</span><input name="search" value="${h(state.storeQuery)}" placeholder="O que você está procurando?" aria-label="Pesquisar produtos da loja"><button class="btn btn-orange btn-sm">Buscar</button></form><div class="chips" style="margin-bottom:23px">${categories.map(c=>`<button class="chip ${state.category===c?'active':''}" data-action="category" data-category="${h(c)}">${h(c)}</button>`).join('')}</div>${products.length?`<div class="product-grid">${products.map(p=>productCard(p,own)).join('')}</div>`:empty('▧',state.publicProducts.length?'Nenhum produto neste filtro':'Esta vitrine ainda não tem produtos',state.publicProducts.length?'Experimente uma categoria diferente.':'O proprietário ainda está escolhendo ofertas para publicar.',own?`<a href="#/adicionar" class="btn btn-orange">Adicionar um produto</a>`:'')}<div class="alert info" style="margin-top:24px">Você será direcionado ao site ou aplicativo da Shopee para concluir a compra. Esta é uma vitrine independente e pode conter links de afiliado.</div></div>`;}
+ const link=shopUrl(s.ownerUid);
+ return `<div class="container storefront-page">
+  <section class="storefront-hero" aria-labelledby="store-name">
+   <div class="storefront-copy"><span class="storefront-tag">✦ VITRINE PÚBLICA · SELEÇÃO DE AFILIADOS</span>
+    <div class="storefront-identity"><div class="storefront-avatar">${h(initials(s.name))}</div><div><span class="storefront-overline">Encontre seus próximos favoritos</span><h1 id="store-name">${h(s.name)}</h1></div></div>
+    <p class="storefront-description">${h(s.description||'Uma seleção de produtos especiais para você descobrir.')}</p>
+    <div class="storefront-stats"><span>✦ <b>${state.publicProducts.length}</b> ${state.publicProducts.length===1?'achado':'achados'} na vitrine</span><span>✓ Compras diretamente na Shopee</span></div>
+    <div class="storefront-hero-actions">${shareButtons(s.ownerUid,s.name)}${own?`<a href="#/adicionar" class="btn btn-hero-outline btn-sm">+ Adicionar produto</a>`:''}</div>
+   </div>
+   <div class="storefront-illustration" aria-hidden="true"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="gift-card"><span class="gift-star">✦</span><span class="gift-line"></span><span class="gift-line narrow"></span><span class="gift-dot">♥</span></div><div class="floating-emoji coin">★</div><div class="floating-emoji heart">♥</div><div class="floating-label">curadoria especial ✧</div></div>
+  </section>
+  <div class="storefront-share-strip"><div><span class="storefront-link-label">SEU LINK DESTA VITRINE</span><strong>${h(link)}</strong><small>Envie para amigos, família ou compartilhe nas redes sociais.</small></div>${shareButtons(s.ownerUid,s.name)}</div>
+  <section class="storefront-collection"><div class="storefront-section-top"><div><span class="eyebrow">ESCOLHAS FEITAS PARA VOCÊ</span><h2>Garimpos que valem o clique<span class="brand-accent">.</span></h2><p>${products.length} ${products.length===1?'produto disponível':'produtos disponíveis'} nesta seleção</p></div>${own?'<a href="#/adicionar" class="btn btn-orange btn-sm">+ Novo produto</a>':''}</div>
+  <form class="searchbar storefront-search" data-form="search-store"><span class="searchbar-icon">⌕</span><input name="search" value="${h(state.storeQuery)}" placeholder="Busque um produto nesta vitrine..." aria-label="Pesquisar produtos da vitrine"><button class="btn btn-orange btn-sm">Buscar</button></form>
+  <div class="chips storefront-categories">${categories.map(c=>`<button class="chip ${state.category===c?'active':''}" data-action="category" data-category="${h(c)}">${h(c)}</button>`).join('')}</div>
+  ${products.length?`<div class="product-grid storefront-products">${products.map(p=>productCard(p,own)).join('')}</div>`:empty('▧',state.publicProducts.length?'Não encontramos produtos para esse filtro':'Sua vitrine está prontinha para receber produtos',state.publicProducts.length?'Tente pesquisar por outro nome ou categoria.':'Adicione seu primeiro link de afiliado para mostrar seus produtos.',own?'<a href="#/adicionar" class="btn btn-orange">Adicionar meu primeiro produto</a>':'')}
+  </section><div class="storefront-disclaimer">✓ Vitrine independente de afiliados. Ao comprar, você será direcionado ao site ou aplicativo oficial da Shopee. Preços e disponibilidade podem mudar.</div>
+ </div>`;
+}
 function sidebar(){const items=[['painel','▦','Início'],['adicionar','＋','Adicionar produto'],['produtos','▤','Meus produtos'],['catalogo','⌕','Pesquisar na Shopee'],['financeiro','◴','Comissões'],['configuracoes','⚙','Minha loja']];const u=state.user;return `<aside class="sidebar"><div class="side-profile"><span class="avatar">${h(initials(u?.displayName))}</span><div style="min-width:0"><strong>${h(u?.displayName||'Minha conta')}</strong><small>Minha vitrine de afiliados</small></div></div><nav class="side-nav">${items.map(([id,icon,label])=>`<a href="#/${id}" class="${state.route===id?'active':''}"><span class="side-icon">${icon}</span>${h(label)}</a>`).join('')}</nav><div class="sidebar-bottom">Vitrine Livre · administração privada</div></aside>`;}
 function adminPage(body){return `<div class="container layout">${sidebar()}<div class="dashboard-main">${state.ownerError?alertBox('danger',`<strong>Configuração do Realtime Database pendente.</strong> ${h(state.ownerError)} <a href="https://console.firebase.google.com/project/gahepatama-4707c/database" target="_blank" rel="noopener noreferrer">Abrir Firebase ↗</a>`):''}${body}</div></div>`;}
 function adminHead(title,desc,actions=''){return `<div class="page-header"><div><span class="eyebrow">Área do afiliado</span><h1>${h(title)}</h1><p>${h(desc)}</p></div><div class="page-header-actions">${actions}</div></div>`;}
@@ -169,7 +302,7 @@ function metric(label,value,icon,detail){return `<div class="metric"><div class=
 function adminHome(){
  const s=state.shop,r=state.report?.summary;
  return adminPage(adminHead('Minha vitrine','Seu primeiro produto pode ser publicado sem ID de loja e sem API.',`${s?`<a href="#/loja/${encodeURIComponent(s.ownerUid)}" class="btn btn-white btn-sm">↗ Ver minha vitrine</a>`:''}<a href="#/adicionar" class="btn btn-orange btn-sm">+ Adicionar produto</a>`)
- +`<div class="panel quick-panel"><div class="panel-title"><h3>Comece por aqui</h3><span class="pill green">3 passos</span></div><div class="quick-steps">
+ +`<div class="welcome-share"><div><span>✦ SUA VITRINE ESTÁ NO AR</span><strong>${h(s?.name||'Minha vitrine')}</strong><small>Divulgue suas escolhas favoritas em um único link.</small></div>${s?shareButtons(s.ownerUid,s.name):''}</div><div class="panel quick-panel"><div class="panel-title"><h3>Comece por aqui</h3><span class="pill green">3 passos</span></div><div class="quick-steps">
   <div class="quick-step"><span class="guide-count complete">✓</span><div><strong>Entre com Google</strong><p>Sua conta e sua vitrine já estão prontas.</p></div></div>
   <div class="quick-step"><span class="guide-count">2</span><div><strong>Adicione o primeiro link de afiliado</strong><p>Gere o link na Shopee e cole aqui o título e o endereço.</p><a href="#/adicionar" class="text-link">Adicionar produto →</a></div></div>
   <div class="quick-step"><span class="guide-count">3</span><div><strong>Compartilhe sua vitrine</strong><p>Qualquer pessoa pode ver seus produtos e comprar na Shopee.</p></div></div>
@@ -179,23 +312,28 @@ function adminHome(){
  ${state.myProducts.length?`<div class="section-heading" style="margin-top:22px"><div><h2>Últimos produtos</h2></div><a href="#/produtos" class="text-link">Ver todos →</a></div><div class="product-grid">${state.myProducts.slice(0,4).map(p=>productCard(p,true)).join('')}</div>`:''}`);
 }
 function catalog(){return adminPage(adminHead('Buscar produtos','Pesquise diretamente na Shopee ou pela sua API de afiliados, quando conectada.','<a href="#/adicionar" class="btn btn-white btn-sm">Tenho um link da Shopee →</a>')+(!state.connected?alertBox('warning','<strong>Busca disponível.</strong> Pesquise diretamente na Shopee e adicione o link que você converteu no programa de afiliados. Para resultados integrados e geração automática, conecte a API em <a href="#/configuracoes">Configurações</a>.'):alertBox('info','Os produtos vêm da API de afiliados. Ao adicionar, o sistema gera um link associado às suas credenciais e publica em sua vitrine.'))+`<div class="panel"><div class="panel-title"><h3>Pesquisar catálogo Shopee</h3><span class="pill orange">${state.connected?'API de afiliados':'Busca externa Shopee'}</span></div><form class="search-tool" data-form="search-offers"><div class="searchbar"><span class="searchbar-icon">⌕</span><input name="keyword" value="${h(state.offerQuery)}" placeholder="Ex.: fone bluetooth, air fryer, camiseta..." aria-label="Busca de ofertas Shopee" required minlength="2"><button class="btn btn-orange btn-sm">${state.connected?'Buscar ofertas':'Buscar na Shopee ↗'}</button></div></form>${state.loadingOffers?loading('Buscando ofertas da Shopee...'):(state.offers.length?`<div style="margin-bottom:14px" class="result-count">${state.offers.length} ofertas encontradas ${state.offerPage>1?'· página '+state.offerPage:''}</div><div class="product-grid">${state.offers.map(offerCard).join('')}</div>${state.offerNext?`<div style="text-align:center;margin-top:18px"><button data-action="more-offers" class="btn btn-white">Carregar mais ofertas</button></div>`:''}`:empty('⌕','Encontre produtos para sua vitrine',state.connected?'Digite o nome de um produto e clique em Buscar ofertas.':'Pesquise na Shopee sem integração e publique links já convertidos no programa de afiliados.',`<a href="#/adicionar" class="btn btn-white">Adicionar pelo link →</a>`))}</div>`);}
-function addManual(){return adminPage(adminHead('Adicionar produto','Um título e seu link de afiliado são suficientes para começar.')
- +`<div class="panel"><div class="panel-title"><h3>Publicar em poucos segundos</h3><span class="pill green">Sem API e sem ID de loja</span></div>
-  <div class="alert info"><strong>Primeiro, copie seu link de afiliado na Shopee.</strong> No app: <strong>Afiliados → Conta → Link de Conversão</strong>. No computador: <strong>Portal de Afiliados → Oferta → Link Personalizado</strong>. <a class="text-link" target="_blank" rel="noopener noreferrer" href="https://help.shopee.com.br/portal/10/article/128461-Como-gerar-links-de-produtos-ou-lojas">Ver tutorial oficial ↗</a>. Um link comum não gera comissão automaticamente.</div>
-  <form data-form="manual-product"><div class="form-grid">
-   <label class="form-control span-2"><span class="form-label">1. Nome do produto ou loja *</span><input name="name" class="field" required maxlength="180" placeholder="Ex.: Fone Bluetooth sem fio"></label>
-   <label class="form-control span-2"><span class="form-label">2. Seu link de afiliado Shopee *</span><input name="affiliateUrl" class="field" type="url" required placeholder="https://s.shopee.com.br/..." autocomplete="off"><span class="hint">Cole o link que foi gerado ou convertido na sua própria conta de afiliado.</span></label>
+function addManual(){return adminPage(adminHead('Adicionar produto','Cole seu link da Shopee e deixe que a plataforma tente encontrar a foto automaticamente.')
+ +`<div class="panel add-easy-panel"><div class="panel-title"><h3>Seu produto, em poucos cliques</h3><span class="pill green">✨ Simples e rápido</span></div>
+ <form data-form="manual-product" class="easy-product-form">
+  <div class="capture-url"><label class="form-control"><span class="form-label"><span class="mini-step">1</span> Cole seu link de afiliado da Shopee *</span><input name="affiliateUrl" class="field capture-input" type="url" required placeholder="https://s.shopee.com.br/..." autocomplete="off" inputmode="url" aria-describedby="preview-status"><span class="hint">Use o link que você gerou no programa de afiliados. O site não transforma um link comum em link com comissão.</span></label>
+  <button type="button" class="btn btn-white btn-sm" data-action="retry-preview">⌕ Buscar imagem</button></div>
+  <p id="preview-status" class="preview-status" data-preview-status data-status="idle" role="status" aria-live="polite">Cole um link para tentar encontrar a imagem e o título automaticamente.</p>
+  <small class="hint">Prévia automática opcional: a URL pode ser consultada num serviço externo. Se a Shopee bloquear, ajuste a foto manualmente.</small>
+  <div class="easy-preview-layout"><div class="mini-preview" data-preview-card><div class="mini-preview-image"><span aria-hidden="true">▣</span></div><div class="mini-preview-text"><span>PRÉVIA DA VITRINE</span><strong>Seu produto aparecerá aqui</strong><small>Foto e título serão preenchidos quando disponíveis.</small></div></div>
+   <label class="form-control easy-title"><span class="form-label"><span class="mini-step">2</span> Título do produto *</span><input name="name" class="field" required maxlength="180" placeholder="Preenchido automaticamente quando disponível"><span class="hint">Você sempre pode ajustar o nome.</span></label>
   </div>
-  <details class="simple-details"><summary>Personalizar produto (opcional)</summary><div class="form-grid" style="margin-top:16px">
-   <label class="form-control span-2"><span class="form-label">Link original do produto/loja</span><input name="originalUrl" type="url" class="field" placeholder="https://shopee.com.br/... (opcional)"></label>
+  <details class="simple-details easy-extra"><summary>✎ Ajustar foto, preço ou categoria (opcional)</summary><div class="form-grid" style="margin-top:16px">
+   <label class="form-control span-2"><span class="form-label">Foto do produto — URL HTTPS</span><input name="image" type="url" class="field" placeholder="https://exemplo.com/foto.jpg"><span class="hint">Se a busca automática não encontrar uma foto, cole aqui o link da imagem.</span></label>
    <label class="form-control"><span class="form-label">Preço informativo</span><input name="price" type="number" min="0" step="0.01" class="field" placeholder="49.90"></label>
    <label class="form-control"><span class="form-label">Categoria</span><select name="category" class="field">${categories.slice(1).map(x=>`<option value="${h(x)}">${h(x)}</option>`).join('')}</select></label>
-   <label class="form-control span-2"><span class="form-label">Imagem (URL HTTPS)</span><input name="image" type="url" class="field" placeholder="https://..."></label>
-   <label class="form-control span-2"><span class="form-label">Descrição</span><textarea name="description" maxlength="350" class="field field-area" placeholder="Resumo opcional"></textarea></label>
-  </div></details><div class="form-actions"><button type="submit" class="btn btn-orange">Publicar na minha vitrine →</button><a class="btn btn-white" href="#/produtos">Ver meus produtos</a></div></form>
- </div>
- ${state.connected?`<details class="panel advanced-section"><summary>Avançado: gerar link automaticamente com a API Shopee</summary><p>Use esta opção somente quando suas credenciais da Open API estiverem conectadas e o backend Firebase estiver ativo.</p><form data-form="api-product"><div class="form-grid"><label class="form-control span-2"><span class="form-label">Nome do produto *</span><input name="name" class="field" maxlength="180" required></label><label class="form-control span-2"><span class="form-label">Link original da Shopee *</span><input name="originalUrl" class="field" type="url" required placeholder="https://shopee.com.br/..."></label></div><div class="form-actions"><button type="submit" class="btn btn-orange">Gerar link e publicar</button></div></form></details>`:''}
- <div class="panel"><strong>Não tem um link para divulgar?</strong><p style="margin-top:7px">Pesquise um produto e gere o link primeiro na sua conta Shopee Afiliados.</p><div class="form-actions"><a href="#/catalogo" class="btn btn-white">Pesquisar produtos na Shopee ↗</a><a href="#/ajuda-id" class="text-link">Dúvidas sobre o ID da loja</a></div></div>`);}
+   <label class="form-control span-2"><span class="form-label">Link original do produto (se diferente do link de afiliado)</span><input name="originalUrl" type="url" class="field" placeholder="https://shopee.com.br/..."></label>
+   <label class="form-control span-2"><span class="form-label">Descrição curta</span><textarea name="description" maxlength="350" class="field field-area" placeholder="Uma frase sobre o produto"></textarea></label>
+  </div></details>
+  <div class="easy-submit"><div><span>✓ Sua vitrine pública já está pronta</span><small>Você controla os produtos e os visitantes compram diretamente na Shopee.</small></div><button type="submit" class="btn btn-orange btn-primary-action">Publicar produto →</button></div>
+ </form></div>
+ <div class="panel"><strong>Não tem um link de afiliado?</strong><p style="margin-top:7px">Abra o programa de afiliados da Shopee, escolha o produto e use a opção de converter ou obter link. Depois volte e cole aqui.</p><div class="form-actions"><a href="https://help.shopee.com.br/portal/10/article/128461-Como-gerar-seus-links-de-Afiliado-ou-ID-de-produto-para-compartilhar" target="_blank" rel="noopener noreferrer" class="btn btn-white">Como obter o link ↗</a><a href="#/catalogo" class="text-link">Pesquisar na Shopee →</a></div></div>
+ ${state.connected?`<details class="panel advanced-section"><summary>Avançado: gerar link rastreável pela API Shopee</summary><p>Exige credenciais da Open API já conectadas e Cloud Functions implantadas.</p><form data-form="api-product"><div class="form-grid"><label class="form-control span-2"><span class="form-label">Nome *</span><input name="name" class="field" maxlength="180" required></label><label class="form-control span-2"><span class="form-label">URL original *</span><input name="originalUrl" class="field" type="url" required></label></div><div class="form-actions"><button type="submit" class="btn btn-orange">Gerar link e publicar</button></div></form></details>`:''}
+ `);}
 function adminProducts(){return adminPage(adminHead('Meus produtos','Gerencie os itens publicados na sua vitrine.',`<a href="#/adicionar" class="btn btn-orange btn-sm">+ Novo produto</a>`)+(state.myProducts.length?`<div class="panel"><div class="panel-title"><h3>Produtos publicados</h3><span class="pill gray">${state.myProducts.length} itens</span></div><div class="table-scroll"><table class="table"><thead><tr><th>Produto</th><th>Preço</th><th>Link</th><th>Origem</th><th>Ações</th></tr></thead><tbody>${state.myProducts.map(p=>`<tr><td><div class="table-product">${safeImage(p.image)?`<img class="table-product-thumb" src="${h(safeImage(p.image))}" alt="">`:'<div class="table-product-thumb" style="display:grid;place-items:center">▧</div>'}<div><strong>${h(p.name)}</strong><small>${h(p.category)}</small></div></div></td><td>${p.price==null?'—':money(p.price)}</td><td><span class="pill ${p.trackingSource==='api'?'green':'gray'}">${p.trackingSource==='api'?'Link da API':'Link informado'}</span></td><td>Shopee</td><td><div class="table-actions"><a class="btn btn-white btn-sm" href="${h(validShopee(p.affiliateUrl)?p.affiliateUrl:'https://shopee.com.br')}" rel="noopener noreferrer sponsored" target="_blank">Abrir ↗</a><button class="btn btn-outline btn-sm" data-action="remove-product" data-id="${h(p.id)}">Excluir</button></div></td></tr>`).join('')}</tbody></table></div></div>`:empty('▤','Sua vitrine está esperando produtos','Busque produtos da Shopee ou adicione seu próprio link de afiliado.',`<a href="#/catalogo" class="btn btn-orange">Buscar produtos →</a>`)));}
 function finance(){const r=state.report?.summary;const days=state.report?.days||30;return adminPage(adminHead('Minhas comissões','Acompanhe os resultados disponíveis na sua API de Afiliados Shopee.',`<button class="btn btn-orange btn-sm" data-action="load-report" data-days="30">↻ Consultar Shopee</button>`)+alertBox('info','Os números abaixo são <strong>conversões e comissões reportadas pela API</strong>. Não representam dinheiro disponível para saque; valores estimados podem mudar até a validação e não incluem necessariamente todos os períodos.')+(!state.connected?alertBox('warning','Conecte sua API de afiliados em <a href="#/configuracoes">Configurações</a> para consultar valores reais.'):state.reportError?alertBox('danger',h(state.reportError)):'')+`<div class="report-band"><span class="eyebrow white">COMISSÃO ESTIMADA · ÚLTIMOS ${days} DIAS</span><strong>${r?money(r.total):'—'}</strong><p>${r?'Valor informado pelo relatório de conversões da Shopee.':'Clique em Consultar Shopee para carregar os valores da sua conta.'}</p>${r?`<div class="report-bars"><span style="width:${Math.min(100,r.total>0?r.completed/r.total*100:0)}%"></span><span style="width:${Math.min(100,r.total>0?r.pending/r.total*100:0)}%"></span></div><small>Concluídos e pendentes classificados por status de pedidos; alguns pedidos podem misturar status.</small>`:''}</div><div class="metric-grid">${metric('Estimadas na vitrine',r?money(r.siteTotal):'—','◎','Com identificação SubId shopeepanel')}${metric('Pedidos informados',r?String(r.orders):'—','▤','Janela do relatório')}${metric('Comissões concluídas',r?money(r.completed):'—','✓','Ainda sujeitas à validação')}${metric('Conversões únicas',r?String(r.conversions):'—','◴','Registros encontrados na API')}</div><div class="panel"><div class="panel-title"><h3>Sobre os números</h3><span class="pill orange">Transparência</span></div><p>O total da conta inclui as conversões reportadas pela Shopee nos últimos ${days} dias. A comissão atribuída a esta vitrine considera a marcação SubId dos links gerados aqui. Links adicionados manualmente podem não ser identificados como vendas desta vitrine.</p><div class="form-actions"><button class="btn btn-white" data-action="load-report" data-days="7">Últimos 7 dias</button><button class="btn btn-white" data-action="load-report" data-days="30">Últimos 30 dias</button></div>${r?`<div class="status-row">${r.partial?'⚠ O relatório pode estar incompleto por limite de paginação.':'✓ Relatório consultado em '+formattedDate(state.report.consultedAt)}</div>`:''}</div>`);}
 function settings(){const s=state.shop||{};return adminPage(adminHead('Minha loja','Personalize sua vitrine. O ID numérico da Shopee não é obrigatório.')
@@ -205,7 +343,7 @@ function settings(){const s=state.shop||{};return adminPage(adminHead('Minha loj
  <label class="form-control span-2"><span class="form-label">Descrição</span><textarea name="description" class="field field-area" maxlength="240">${h(s.description||'')}</textarea></label>
  <label class="form-control span-2"><span class="form-label">Link da loja Shopee (opcional)</span><input class="field" name="referenceUrl" type="url" value="${h(s.referenceUrl||'')}" placeholder="https://shopee.com.br/q63ifc2_ce"><span class="hint">Na Shopee, abra o perfil da loja → Compartilhar → Copiar link. Basta o endereço; o número da loja não é necessário.</span></label>
  </div><label class="public-toggle"><input type="checkbox" name="isPublic" ${s.isPublic!==false?'checked':''}> Permitir que qualquer visitante veja minha vitrine</label><div class="form-actions"><button class="btn btn-orange" type="submit">Salvar alterações</button></div></form>
- ${s.ownerUid?`<div class="sharing"><label>MEU LINK PÚBLICO</label><div class="share-line"><input readonly value="${h(shopUrl(s.ownerUid))}" aria-label="Link público"><button class="btn btn-orange btn-sm" data-action="copy" data-url="${h(shopUrl(s.ownerUid))}">Copiar</button></div></div>`:''}</div>
+ ${s.ownerUid?`<div class="sharing"><label>MEU LINK PÚBLICO</label><div class="share-line"><input readonly value="${h(shopUrl(s.ownerUid))}" aria-label="Link público"><button class="btn btn-orange btn-sm" data-action="copy" data-url="${h(shopUrl(s.ownerUid))}">Copiar</button></div>${shareButtons(s.ownerUid,s.name)}</div>`:''}</div>
  <details class="simple-details guide-disclosure"><summary>Como encontrar o ID da loja Shopee? (opcional)</summary>${shopIdGuide()}</details>
  <details class="panel advanced-section"><summary>Integração avançada: API Shopee e comissões <span class="pill ${state.connected?'green':'gray'}">${state.connected?'Conectada':'Opcional'}</span></summary>
   <p>Você <strong>não precisa</strong> desta integração para criar a vitrine, adicionar seus links e compartilhá-la. Ela serve para procurar ofertas pela API, gerar links automaticamente e consultar comissões. Requer backend Firebase configurado.</p>
@@ -242,6 +380,7 @@ async function fetchStore(uid){
   const products=await get(dbRef('publicProducts/'+uid));
   if(nonce!==loadingNonce)return;
   state.publicShop={...data,ownerUid:uid};
+  document.title=state.publicShop.name+' | Vitrine Livre';
   state.publicProducts=Object.entries(products.val()||{}).map(([id,p])=>({...p,id}));
   state.publicProducts.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
  }catch(error){
@@ -280,7 +419,7 @@ async function refreshOwn(){
  render();
 }
 
-async function onRoute(){const {route,id}=parseRoute();state.route=route;state.routeId=id;state.storeQuery='';state.category='Tudo';if(!state.authReady){render();return;}if(route==='loja'){await fetchStore(id);return;}render();if(route==='home'&&!state.shops.length)await fetchPublicShops();}
+async function onRoute(){const {route,id}=parseRoute();if(route!=='loja')document.title='Vitrine Livre | Sua loja de afiliados';state.route=route;state.routeId=id;state.storeQuery='';state.category='Tudo';if(!state.authReady){render();return;}if(route==='loja'){await fetchStore(id);return;}render();if(route==='home'&&!state.shops.length)await fetchPublicShops();}
 async function logIn(){try{const p=new GoogleAuthProvider();p.setCustomParameters({prompt:'select_account'});await signInWithPopup(auth,p);location.hash='#/painel';}catch(error){const code=error?.code||'';let msg=errText(error);if(code.includes('unauthorized-domain'))msg='Autorize perabru.github.io no Firebase Authentication → Settings → Authorized domains.';else if(code.includes('operation-not-allowed'))msg='Ative o provedor Google em Firebase Authentication → Sign-in method.';else if(code.includes('popup-closed-by-user'))return;toast(msg,true);}}
 async function loadOffers(keyword,page=1){
  if(!state.connected){
@@ -331,7 +470,7 @@ app.addEventListener('submit',async(event)=>{
   if(type==='manual-product'){
    await saveManualProduct(values);
    toast('Produto publicado! Agora compartilhe sua vitrine.');
-   await refreshOwn();await fetchPublicShops();location.hash='#/produtos';
+   await refreshOwn();await fetchPublicShops();location.hash='#/loja/'+encodeURIComponent(state.user.uid);
   }else if(type==='api-product'){
    if(!state.connected)throw new Error('A API de afiliados ainda não está conectada.');
    await call('publishProduct',{name:values.name,originalUrl:values.originalUrl,description:'',category:'Outros'});
@@ -352,11 +491,38 @@ app.addEventListener('submit',async(event)=>{
  }catch(error){toast(errText(error),true);}finally{if(form.isConnected)formBusy(form,false);}
 });
 
+app.addEventListener('input',event=>{
+ const form=event.target.closest('form[data-form="manual-product"]');
+ if(!form)return;
+ if(event.target.name==='affiliateUrl')scheduleProductPreview(form);
+ if(['name','image','category'].includes(event.target.name)){
+  if(event.target.dataset)event.target.dataset.autofilled='0';
+  renderPreviewCard(form);
+ }
+});
+
 document.addEventListener('click',async(event)=>{
  const el=event.target.closest('[data-action]');if(!el)return;
  const action=el.dataset.action;
  if(action==='login'||action==='start-store'){if(!state.user){await logIn();}else location.hash='#/painel';return;}
  if(action==='logout'){await signOut(auth);location.hash='#/';toast('Você saiu da sua conta.');return;}
+ if(action==='retry-preview'){
+  const form=el.closest('form[data-form="manual-product"]');
+  if(form)scheduleProductPreview(form,true);
+  return;
+ }
+ if(action==='share-shop'){
+  const url=el.dataset.url||'',name=el.dataset.name||'Vitrine de afiliados';
+  if(!url)return;
+  if(navigator.share){
+   try{await navigator.share({title:name,text:'Conheça os produtos desta vitrine',url});}
+   catch(error){if(error?.name!=='AbortError')toast('Não foi possível compartilhar. Use Copiar link.',true);}
+  }else{
+   try{await navigator.clipboard.writeText(url);toast('Link copiado! Compartilhe onde preferir.');}
+   catch{window.open('https://wa.me/?text='+encodeURIComponent(shareText(name,url)),'_blank','noopener,noreferrer');}
+  }
+  return;
+ }
  if(action==='copy-shop-id'){try{await navigator.clipboard.writeText(el.dataset.shopId||'');toast('ID copiado!');}catch{toast('Não foi possível copiar. Selecione e copie o número.',true);}return;}
   if(action==='copy'){try{await navigator.clipboard.writeText(el.dataset.url||'');toast('Link da vitrine copiado!');}catch{toast('Não foi possível copiar o link automaticamente.',true);}return;}
  if(action==='category'){state.category=el.dataset.category;render();return;}

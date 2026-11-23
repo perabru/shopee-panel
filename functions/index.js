@@ -81,6 +81,24 @@ exports.searchOffers=onCall({secrets:[encryptionKey],timeoutSeconds:45},async re
  }catch(error){throw handleError(error);}
 });
 
+// Prévia opcional de imagem/título pela Open API oficial (somente ofertas elegíveis).
+// Não revela credenciais nem tenta buscar links externos arbitrários.
+exports.previewProduct=onCall({secrets:[encryptionKey],timeoutSeconds:35},async request=>{
+ try{
+  const uid=verifiedUid(request);
+  const creds=await getCredentials(uid);
+  if(!creds)throw new HttpsError('failed-precondition','API de afiliados não conectada.');
+  const originalUrl=core.shopeeUrl(request.data?.url);
+  const ids=core.productIdsFromUrl(originalUrl);
+  if(!ids)return {available:false,reason:'Este link não contém um ID de produto consultável pela API.'};
+  const result=await core.callAffiliate({...creds,query:core.queryOfferByItemId(ids.itemId)});
+  const matching=(result.productOfferV2?.nodes||[]).find(p=>String(p.itemId)===ids.itemId&&String(p.shopId)===ids.shopId);
+  if(!matching)return {available:false,reason:'Produto não disponível no catálogo de afiliados.'};
+  const offer=core.mapOffer(matching);
+  return {available:true,offer:{name:offer.name,image:offer.image,price:offer.price,originalUrl:offer.originalUrl}};
+ }catch(error){throw handleError(error);}
+});
+
 exports.publishProduct=onCall({secrets:[encryptionKey],timeoutSeconds:45},async request=>{
  try{
   const uid=verifiedUid(request);
