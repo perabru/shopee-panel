@@ -112,3 +112,149 @@ test('keeps ambiguous old/new prices, ranges and malformed amounts blank',()=>{
  }
  assert.equal(tools.parseSharedProduct(`Confira Fone Bluetooth por R$129,90. Antes R$159,90. ${link}`).price,null);
 });
+
+const canonical='https://shopee.com.br/product/123/456';
+const landing='https://shopee.com.br/opaanlp/123/456?__mobile__=1&uls_trackid=X%2FY';
+function completeProductPayload(url=canonical){
+ return {status:'success',statusCode:200,data:{url,title:'Fone de ouvido',productJsonLd:[JSON.stringify({'@context':'https://schema.org','@graph':[{'@type':'Product',name:'Outro produto',url:'https://shopee.com.br/product/123/999',image:'https://cdn.example/other.jpg',offers:{'@type':'Offer',price:'99.00',priceCurrency:'BRL'}},{'@type':'Product',name:'Fone Bluetooth Pro',url:canonical,description:'<p>Som estéreo &amp; microfone.</p>',image:['https://cdn.example/front.jpg','https://cdn.example/back.jpg'],offers:{'@type':'Offer',price:'129.90',priceCurrency:'BRL',url:canonical}}]})]}};
+}
+
+test('imports the full matching JSON-LD product including description, price and gallery',async()=>{
+ const calls=[];
+ const lookup=tools.createPreviewLookup({fetch:async url=>{calls.push(url);return response(completeProductPayload());}});
+ const info=await lookup(link);
+ assert.equal(info.name,'Fone Bluetooth Pro');
+ assert.equal(info.description,'Som estéreo & microfone.');
+ assert.equal(info.price,129.9);
+ assert.equal(info.currency,'BRL');
+ assert.equal(info.priceSource,'dados estruturados do produto');
+ assert.deepEqual(info.images,['https://cdn.example/front.jpg','https://cdn.example/back.jpg']);
+ assert.equal(info.image,info.images[0]);
+ assert.equal(info.resolvedUrl,canonical);
+ assert.equal(info.canonicalUrl,canonical);
+ assert.equal(calls.length,1);
+ assert.equal(new URL(calls[0]).searchParams.get('url'),link);
+});
+
+test('requests rendered product metadata, structured data and explicit currency extraction',async()=>{
+ let requested;
+ const lookup=tools.createPreviewLookup({fetch:async url=>{requested=new URL(url);return response(completeProductPayload());}});
+ await lookup(link);
+ assert.equal(requested.origin,'https://api.microlink.io');
+ assert.equal(requested.searchParams.get('url'),link);
+ assert.equal(requested.searchParams.get('prerender'),'true');
+ assert.equal(requested.searchParams.get('data.productJsonLd.selectorAll'),'script[type="application/ld+json"]');
+ assert.equal(requested.searchParams.get('data.productJsonLd.attr'),'text');
+ assert.equal(requested.searchParams.get('data.pageTitle.selector'),'h1');
+ assert.equal(requested.searchParams.get('data.productDescription.selector'),'[itemprop="description"]');
+ assert.match(requested.searchParams.get('data.priceMeta.selector'),/product:price:amount/);
+ assert.equal(requested.searchParams.get('data.priceMeta.attr'),'content');
+ assert.match(requested.searchParams.get('data.currencyMeta.selector'),/product:price:currency/);
+ assert.equal(requested.searchParams.get('data.priceText.selector'),'[itemprop="price"]');
+});
+
+test('follows an empty opaanlp landing page once and keeps the original affiliate cache key',async()=>{
+ const calls=[];
+ const lookup=tools.createPreviewLookup({fetch:async url=>{
+  const target=new URL(url).searchParams.get('url');calls.push(target);
+  return response(target===link?{status:'success',data:{url:landing,title:'456?__mobile__=1&exp_group=a'}}:completeProductPayload());
+ }});
+ const info=await lookup(link);
+ assert.deepEqual(calls,[link,canonical]);
+ assert.equal(info.name,'Fone Bluetooth Pro');
+ assert.equal(info.price,129.9);
+ assert.equal(info.canonicalUrl,canonical);
+ await lookup(link);
+ assert.deepEqual(calls,[link,canonical],'the original affiliate URL has a successful cached result');
+ assert.equal(tools.extractShopeeLink(link),link,'canonical read never rewrites affiliate tracking');
+});
+
+test('completes partial opaanlp metadata from canonical product details',async()=>{
+ const calls=[];
+ const lookup=tools.createPreviewLookup({fetch:async url=>{
+  const target=new URL(url).searchParams.get('url');calls.push(target);
+  return response(target===link?{status:'success',data:{url:landing,title:'Fone Bluetooth Pro',image:{url:'https://cdn.example/front.jpg'}}}:completeProductPayload());
+ }});
+ const info=await lookup(link);
+ assert.deepEqual(calls,[link,canonical]);
+ assert.equal(info.description,'Som estéreo & microfone.');
+ assert.equal(info.price,129.9);
+});
+
+test('ID-only and tracking-query page titles are never imported as product names',()=>{
+ for(const title of ['456','123/456','123.456','456?__mobile__=1&exp_group=a','abc123?utm_source=affiliate','https://shopee.com.br/product/123/456']){
+  const info=tools.parsePreview({status:'success',data:{url:canonical,title,image:{url:'https://cdn.example/front.jpg'}}});
+  assert.equal(info.name,'',title);
+  assert.equal(tools.cleanTitle(title),'',title+' helper');
+ }
+});
+
+test('verification and denied pages stop the chain without another preview request',async()=>{
+ for(const payload of [
+  {status:'success',data:{url:'https://shopee.com.br/verify/traffic?shopid=123&itemid=456',title:'Shopee'}},
+  {status:'success',data:{url:landing,title:'A verificação falhou. Tente novamente em alguns minutos.'}},
+  {status:'success',statusCode:403,data:{url:landing,title:'456'}}
+ ]){
+  const calls=[];
+  const lookup=tools.createPreviewLookup({fetch:async url=>{calls.push(new URL(url).searchParams.get('url'));return response(payload);}});
+  await assert.rejects(lookup(link),error=>error.code==='PREVIEW_BLOCKED');
+  assert.deepEqual(calls,[link]);
+ }
+});
+
+test('timeout covers the whole redirect chain and retains canonical identity for API fallback',async()=>{
+ const calls=[];let signal;
+ const lookup=tools.createPreviewLookup({timeoutMs:20,fetch:async (url,options)=>{
+  const target=new URL(url).searchParams.get('url');calls.push(target);signal=options.signal;
+  if(target===link){await new Promise(resolve=>setTimeout(resolve,5));return response({status:'success',data:{url:landing,title:'456'}});}
+  return new Promise(()=>{});
+ }});
+ await assert.rejects(lookup(link),error=>{
+  assert.equal(error.code,'PREVIEW_TIMEOUT');
+  assert.equal(error.canonicalUrl,canonical);
+  assert.equal(error.resolvedUrl,landing);
+  return true;
+ });
+ assert.equal(signal.aborted,true);
+ assert.deepEqual(calls,[link,canonical]);
+});
+
+test('canonical request failure carries the product URL and is never cached as success',async()=>{
+ const calls=[];
+ const lookup=tools.createPreviewLookup({fetch:async url=>{
+  const target=new URL(url).searchParams.get('url');calls.push(target);
+  if(target===link)return response({status:'success',data:{url:landing,title:'456'}});
+  throw new TypeError('offline');
+ }});
+ for(let attempt=0;attempt<2;attempt++){
+  await assert.rejects(lookup(link),error=>error.code==='PREVIEW_NETWORK'&&error.canonicalUrl===canonical&&error.resolvedUrl===landing);
+ }
+ assert.deepEqual(calls,[link,canonical,link,canonical]);
+});
+
+test('direct canonical product IDs remain available when preview fails before resolving',async()=>{
+ const direct='https://shopee.com.br/Meu-produto-i.123.456?affiliate=kept';
+ const lookup=tools.createPreviewLookup({fetch:async()=>response({},429)});
+ await assert.rejects(lookup(direct),error=>error.code==='PREVIEW_LIMIT'&&error.canonicalUrl===canonical);
+ assert.equal(tools.canonicalProductUrl('https://shopee.com.br.evil.example/opaanlp/123/456'),'');
+ assert.equal(tools.canonicalProductUrl('https://shopee.com.br/opaanlp/123/456'),canonical);
+});
+
+test('canonical follow preserves the landing photo and missing name while keeping canonical price authoritative',async()=>{
+ for(const [priceText,expectedPrice] of [['R$ 129,90',129.9],['R$ 100 a R$ 150',null]]){
+  const calls=[];
+  const lookup=tools.createPreviewLookup({fetch:async url=>{
+   const target=new URL(url).searchParams.get('url');calls.push(target);
+   if(target===link)return response({status:'success',data:{url:landing,title:'Fone Bluetooth Pro',image:{url:'https://cdn.example/front.jpg'},images:['https://cdn.example/front.jpg','https://cdn.example/back.jpg'],priceMeta:'99.90',currencyMeta:'BRL'}});
+   return response({status:'success',data:{url:canonical,productDescription:'Descrição completa obtida na página do produto.',priceText,currencyMeta:'BRL'}});
+  }});
+  const info=await lookup(link);
+  assert.deepEqual(calls,[link,canonical]);
+  assert.equal(info.name,'Fone Bluetooth Pro');
+  assert.equal(info.description,'Descrição completa obtida na página do produto.');
+  assert.equal(info.image,'https://cdn.example/front.jpg');
+  assert.deepEqual(info.images,['https://cdn.example/front.jpg','https://cdn.example/back.jpg']);
+  assert.equal(info.price,expectedPrice,'do not restore an outdated or ambiguous landing price');
+  assert.equal(info.resolvedUrl,canonical);
+ }
+});

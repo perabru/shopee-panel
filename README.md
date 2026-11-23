@@ -8,12 +8,12 @@ Crie uma vitrine pública de produtos da Shopee, usando seus próprios links de 
 ## Uso simplificado
 
 1. Entre com Google e abra **Adicionar**.
-2. Cole o link ou a mensagem completa de **Compartilhar** da Shopee. O painel identifica o link e tenta buscar a foto e o nome. Em mensagens reconhecidas, aproveita também o nome e o preço explícito.
+2. Cole o link ou a mensagem completa de **Compartilhar** da Shopee. O painel identifica o link, abre a página pelo serviço de leitura e tenta preencher nome, foto, preço e descrição automaticamente. Em mensagens reconhecidas, aproveita também o nome e o preço explícito.
 3. Confira os dados e clique em **Salvar produto**. Preços aceitam `129,90`, `1.299,90` e `129.90`.
 4. Em **Produtos**, use **Compartilhar**, **Copiar oferta** ou **Editar**. A mensagem contém nome, preço (se informado) e o link de afiliado original. O envio acontece no aplicativo escolhido pelo usuário.
 5. Para divulgar toda a seleção, use o link da vitrine na tela **Início**. Vitrines privadas não ficam acessíveis a outros visitantes.
 
-Se a foto não aparecer, tente **Buscar foto** novamente ou informe o endereço completo do produto em **Ajustar foto e outros detalhes**. Esse endereço serve para a busca e não substitui o link de afiliado. Outra alternativa é colar a URL HTTPS da própria imagem. Quando o serviço retornar várias fotos, escolha a correta na prévia.
+Se a foto não aparecer, tente **Buscar dados** novamente ou informe o endereço completo do produto em **Ajustar foto e outros detalhes**. Esse endereço serve para a busca e não substitui o link de afiliado. Outra alternativa é colar a URL HTTPS da própria imagem. Quando o serviço retornar várias fotos, escolha a correta na prévia.
 
 A lista permite buscar produtos por nome ou categoria. Links idênticos não são cadastrados duas vezes. A edição preserva o registro e a data de criação; itens criados pela integração API mantêm suas ações de compartilhamento, mas a edição manual fica indisponível porque as regras atuais do banco não autorizam esse tipo de atualização.
 
@@ -31,11 +31,11 @@ O aplicativo inclui manifesto, ícones próprios, service worker e aviso de atua
 
 **O ID da loja não é necessário** para publicar links de afiliado já gerados. O link deve ter sido convertido pela Shopee: links comuns não passam a gerar comissão por serem cadastrados aqui. O Shopee Panel não recebe pagamentos.
 
-### Como funciona a imagem automática
+### Como funciona o preenchimento pela URL
 
-- Com **App ID + Secret da Open API de Afiliados conectados**, a Cloud Function opcional `previewProduct` busca **nome, imagem e preço** pelo `itemId` de uma URL oficial de produto, quando essa oferta consta no catálogo acessível à conta. Links curtos que não expõem o `itemId` podem não ser identificados pela API.
-- Sem integração, a página **tenta uma prévia pública do link** usando o serviço [Microlink](https://microlink.io/api), que pode retornar o título e a imagem públicos. Essa consulta **envia a URL informada ao serviço de prévia**, não envia seu login ou credenciais. O acesso gratuito tem limites e alguns links da Shopee bloqueiam a leitura ou não exibem imagem.
-- **Não há garantia de extração da foto** de toda URL. Quando a prévia não estiver disponível, a imagem ficará em branco com um ícone; informe manualmente um endereço HTTPS da foto, caso queira. O título permanece editável e obrigatório.
+- Quando faltam dados e você tem **App ID + Secret da Open API de Afiliados conectados**, a Cloud Function opcional `previewProduct` busca **nome, imagem e preço** pelo `itemId` de uma URL oficial de produto, quando essa oferta consta no catálogo acessível à conta. Links curtos que não expõem o `itemId` podem não ser identificados pela API.
+- A leitura da página usa [Microlink](https://microlink.io/api), com renderização de JavaScript, JSON-LD de produto, metadados e campos públicos identificados. Importa descrição, nome, fotos HTTPS e preço em reais quando disponíveis. Identifica URLs intermediárias `/opaanlp/` e consulta o endereço do produto correspondente, com no máximo duas leituras e 30 segundos no total. Não continua a consulta quando detecta login, verificação ou bloqueio. Essa consulta **envia a URL informada ao serviço de leitura**, sem login ou credenciais. O acesso gratuito possui limites.
+- **Não há garantia de extração de toda URL**: alguns produtos só aparecem após login ou verificação da Shopee. A interface indica quais dos quatro campos foram preenchidos e permite completar os ausentes. Não considera IDs, mensagens de erro ou títulos de verificação como nomes de produtos. Não transforma parcelamento, desconto ou faixa de preços em preço único. Campos editados ou apagados pelo usuário permanecem sob seu controle.
 - O sistema **não cria links de afiliado automaticamente sem a API autorizada**. Para link manual, redireciona para o **exato link informado** pelo usuário, sem acrescentar tracking artificial.
 
 ## Onde encontrar o ID da loja Shopee?
@@ -73,7 +73,7 @@ O front-end já usa a configuração pública informada do projeto `gahepatama-4
 
 - Login Google e vitrine criada automaticamente, após as regras do banco e Authentication estarem ativos.
 - Nome e descrição da vitrine, link de referência Shopee e botão para deixá-la pública/privada.
-- Publicação de produtos com links de afiliado previamente convertidos pelo próprio usuário, com prévia automática de imagem/título quando o serviço externo permitir.
+- Publicação de produtos com links de afiliado previamente convertidos pelo próprio usuário, com preenchimento automático dos dados disponíveis quando a loja e o serviço de leitura permitirem.
 - Vitrine pública com visual de catálogo, busca interna, botão de compartilhamento nativo, WhatsApp e links **Comprar na Shopee**.
 
 ### Recursos avançados, opcionais
@@ -101,6 +101,6 @@ firebase deploy --only functions --project gahepatama-4707c
 
 ## Arquivos principais
 
-`index.html`, `styles.css`, `easy.css`, `product-tools.js` e `app.js` formam o site. `pwa.js`, `sw.js`, `manifest.webmanifest`, `offline.html` e `icons/` cuidam da instalação. Incremente `VERSION` em `sw.js` ao publicar novas alterações. `database.rules.json` são as regras de segurança do Realtime Database. `functions/` guarda a integração opcional assinada com a API da Shopee, incluindo `previewProduct` por `itemId`. `tests/` contém verificações automatizadas; execute `node --test tests/*.test.cjs` e `node --check app.js`.
+`index.html`, `styles.css`, `easy.css`, `product-page.js`, `product-tools.js` e `app.js` formam o site. `pwa.js`, `sw.js`, `manifest.webmanifest`, `offline.html` e `icons/` cuidam da instalação. Incremente `VERSION` em `sw.js` ao publicar novas alterações. `database.rules.json` são as regras de segurança do Realtime Database. `functions/` guarda a integração opcional assinada com a API da Shopee, incluindo `previewProduct` por `itemId`. `tests/` contém verificações automatizadas; execute `node --test tests/*.test.cjs` e `node --check app.js`.
 
 O código armazena vitrines em `shopeePanel/v1/shops`, referências públicas em `shopeePanel/v1/publicShops`, produtos em `shopeePanel/v1/publicProducts`. As credenciais e relatórios ficam isolados por usuário e são escritos apenas pelo backend seguro. Nunca publique senhas.

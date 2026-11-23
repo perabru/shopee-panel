@@ -1,10 +1,11 @@
 /* Utilities for the link-to-product flow. No account data is sent to preview services. */
 (function (root, factory) {
   'use strict';
-  const api = factory();
+  const page = typeof module === 'object' && module.exports ? require('./product-page') : root.ProductPage;
+  const api = factory(page);
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.ProductTools = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (productPage) {
   'use strict';
   const MAX_LINK_LENGTH = 1200;
   const MAX_IMAGE_LENGTH = 1400;
@@ -87,6 +88,7 @@
     const text = String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0,220);
     if (isBlockedTitle(text)) return '';
     const title = text.replace(/\s*([|–—-])\s*Shopee(?: Brasil)?\s*$/i, '').trim();
+    if (/^(?:https?:\/\/|\d+(?:[./]\d+)*$)/i.test(title)||/^[^\s?]+\?[^\s]*[=&]/.test(title)) return '';
     if (!title || /^Shopee(?: Brasil)?(?:\s*[|–—-].*)?$/i.test(title)) return '';
     return title.slice(0,180);
   }
@@ -101,77 +103,122 @@
     return error;
   }
 
+  function trustedPageUrl(value) {
+    if (typeof value !== 'string' || !value || value.length > 8192 || /[\s\\\x00-\x1f]/.test(value)) return false;
+    try { const u = new URL(value); return u.protocol==='https:' && SHOPEE_HOST.test(u.hostname) && !u.username && !u.password && !u.port; } catch { return false; }
+  }
+
+  function canonicalProductUrl(value) {
+    if (!trustedPageUrl(value)) return '';
+    const url = new URL(value);
+    // This is for reading the product only. The original affiliate URL stays untouched.
+    if (!/(^|\.)shopee\.com\.br$/i.test(url.hostname)) return '';
+    const match = url.pathname.match(/(?:-i\.|\/(?:product|opaanlp)\/)(\d{1,20})[./](\d{1,20})(?:\/|$)/i);
+    const shop = match?.[1] || url.searchParams.get('shopid');
+    const item = match?.[2] || url.searchParams.get('itemid');
+    return /^\d{1,20}$/.test(shop||'') && /^\d{1,20}$/.test(item||'') ? `https://shopee.com.br/product/${shop}/${item}` : '';
+  }
+
   function parsePreview(payload) {
-    if (payload?.status !== 'success' || !payload?.data) throw previewError('PREVIEW_BLOCKED','A página da Shopee não liberou seus dados. Abra o produto e copie o link completo ou escolha outra foto.');
+    if (payload?.status !== 'success' || !payload?.data) throw previewError('PREVIEW_BLOCKED','A página da Shopee não liberou seus dados. Confira o produto na loja e complete os campos que faltam.');
     const meta = payload.data;
-    if (meta.url && !validShopee(meta.url)) throw previewError('PREVIEW_REDIRECT','O link redirecionou para uma página não reconhecida da Shopee.');
-    if (isBlockedTitle(meta.title)) throw previewError('PREVIEW_BLOCKED','A página da Shopee não liberou seus dados. Abra o produto e copie o link completo ou escolha outra foto.');
-    const candidates = [];
-    function addImage(value) {
-      if (Array.isArray(value)) { value.slice(0,12).forEach(addImage); return; }
-      const url = safeImage(typeof value === 'string' ? value : value?.url);
-      if (url && !candidates.includes(url)) candidates.push(url);
-    }
-    addImage(meta.image);
-    addImage(meta.images);
-    const name = cleanTitle(meta.title);
-    if (!name && !candidates.length) throw previewError('PREVIEW_EMPTY','A página não informou imagem ou título. Cole o link completo do produto ou escolha uma foto.');
-    return {name, image:candidates[0] || '', images:candidates.slice(0,8), source:'prévia pública do link', resolvedUrl:meta.url || ''};
+    if (meta.url && !trustedPageUrl(meta.url)) throw previewError('PREVIEW_REDIRECT','O link redirecionou para uma página não reconhecida da Shopee.');
+    if ([401,403,429].includes(Number(payload.statusCode))) throw previewError('PREVIEW_BLOCKED','A Shopee restringiu a leitura desta página. Confira o produto na loja e complete os campos que faltam.');
+    if (Number(payload.statusCode)>=400) throw previewError('PREVIEW_UNAVAILABLE','A página do produto está indisponível no momento.');
+    const info = productPage.parseProductPage(meta);
+    if (!info.name && !info.image && !info.description && info.price==null) throw previewError('PREVIEW_EMPTY','A página não informou foto, preço ou descrição do produto para leitura automática. Confira na Shopee e complete os campos que faltam.');
+    return {...info, canonicalUrl:canonicalProductUrl(meta.url)};
+  }
+
+  function extractionEndpoint(link) {
+    const endpoint = new URL('https://api.microlink.io/');
+    endpoint.searchParams.set('url',link);
+    endpoint.searchParams.set('prerender','true');
+    const rules = {
+      productJsonLd:{selectorAll:'script[type="application/ld+json"]',attr:'text'},
+      pageTitle:{selector:'h1',attr:'text'},
+      productDescription:{selector:'[itemprop="description"]',attr:'text'},
+      priceMeta:{selector:'meta[property="product:price:amount"],meta[property="og:price:amount"],meta[itemprop="price"],meta[property="shopee:price"]',attr:'content'},
+      currencyMeta:{selector:'meta[property="product:price:currency"],meta[property="og:price:currency"],meta[itemprop="priceCurrency"]',attr:'content'},
+      priceText:{selector:'[itemprop="price"]',attr:'text'}
+    };
+    for (const [field,rule] of Object.entries(rules)) for (const [key,value] of Object.entries(rule)) endpoint.searchParams.set(`data.${field}.${key}`,value);
+    return endpoint.href;
   }
 
   function createPreviewLookup(options = {}) {
     const fetcher = options.fetch || (typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : null);
-    const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1,options.timeoutMs) : 10000;
-    const cacheTtlMs = Number.isFinite(options.cacheTtlMs) ? Math.max(0,options.cacheTtlMs) : 10 * 60 * 1000;
+    const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1,options.timeoutMs) : 30000;
+    const cacheTtlMs = Number.isFinite(options.cacheTtlMs) ? Math.max(0,options.cacheTtlMs) : 5 * 60 * 1000;
     const now = options.now || Date.now;
     const cache = new Map();
     const pending = new Map();
+    const clone = info => ({...info,images:[...info.images]});
     async function lookup(link, {force = false} = {}) {
       if (!validShopee(link)) throw previewError('INVALID_LINK','Cole um endereço HTTPS válido da Shopee.');
-      if (!fetcher) throw previewError('PREVIEW_UNAVAILABLE','Este navegador não consegue consultar a prévia.');
+      if (!fetcher) throw previewError('PREVIEW_UNAVAILABLE','Este navegador não consegue consultar a página.');
       const saved = cache.get(link);
-      if (!force && saved && now() - saved.at < cacheTtlMs) return {...saved.info,images:[...saved.info.images]};
+      if (!force && saved && now() - saved.at < cacheTtlMs) return clone(saved.info);
       if (saved) cache.delete(link);
-      if (pending.has(link)) return pending.get(link);
+      if (pending.has(link)) return clone(await pending.get(link));
       const task = (async () => {
-        const endpoint = new URL('https://api.microlink.io/');
-        endpoint.searchParams.set('url',link);
         const controller = new AbortController();
-        let timer;
+        let timer, resolvedUrl='', canonicalUrl=canonicalProductUrl(link);
+        const annotate = error => Object.assign(error,{resolvedUrl,canonicalUrl});
+        const timeoutError = () => annotate(previewError('PREVIEW_TIMEOUT','A leitura da página demorou demais. Tente novamente ou complete os campos do produto.'));
         const timeout = new Promise((_,reject) => {
-          timer = setTimeout(() => {
-            reject(previewError('PREVIEW_TIMEOUT','A busca da foto demorou demais. Tente novamente ou cole o link completo do produto.'));
-            controller.abort();
-          },timeoutMs);
+          timer = setTimeout(() => { reject(timeoutError()); controller.abort(); },timeoutMs);
         });
+        async function read(url) {
+          let response;
+          try { response = await fetcher(extractionEndpoint(url),{headers:{Accept:'application/json'},signal:controller.signal,referrerPolicy:'no-referrer'}); }
+          catch {
+            if (controller.signal.aborted) throw timeoutError();
+            throw previewError('PREVIEW_NETWORK','Não foi possível ler a página. Verifique sua conexão e tente novamente.');
+          }
+          if (response.status === 429) throw previewError('PREVIEW_LIMIT','O serviço de leitura atingiu o limite temporário. Tente mais tarde ou preencha os dados manualmente.');
+          if (!response.ok) throw previewError('PREVIEW_UNAVAILABLE','O serviço de leitura não conseguiu consultar a página. Tente novamente mais tarde.');
+          let payload;
+          try { payload = await response.json(); }
+          catch { throw previewError('PREVIEW_INVALID','O serviço de leitura respondeu de forma inesperada. Tente novamente.'); }
+          resolvedUrl=trustedPageUrl(payload?.data?.url)?payload.data.url:resolvedUrl;
+          canonicalUrl=canonicalProductUrl(resolvedUrl)||canonicalUrl;
+          return parsePreview(payload);
+        }
         try {
           const request = (async () => {
-            let response;
-            try { response = await fetcher(endpoint.href,{headers:{Accept:'application/json'},signal:controller.signal,referrerPolicy:'no-referrer'}); }
-            catch (error) {
-              if (controller.signal.aborted) throw previewError('PREVIEW_TIMEOUT','A busca da foto demorou demais. Tente novamente ou cole o link completo do produto.');
-              throw previewError('PREVIEW_NETWORK','Não foi possível buscar a foto. Verifique sua conexão e tente novamente.');
+            let first=null, firstError=null;
+            try { first=await read(link); } catch(error) { firstError=error; }
+            // A landing redirect can identify the item without exposing product data.
+            // Never retry a login, security challenge, denial, or service error.
+            const intermediate = trustedPageUrl(resolvedUrl) && /^\/opaanlp\//i.test(new URL(resolvedUrl).pathname);
+            const canFollow = canonicalUrl && canonicalUrl!==link && (firstError?.code==='PREVIEW_EMPTY' || (!firstError && intermediate && (!first.name||!first.image||first.price==null||!first.description)));
+            if (canFollow) {
+              try {
+                const detail=await read(canonicalUrl);
+                if (!first) return detail;
+                const images=[...new Set([...detail.images,...first.images])].slice(0,8);
+                return {...detail,name:detail.name||first.name,description:detail.description||first.description,image:detail.image||first.image,images};
+              }
+              catch(error) { if (!first) throw error; return {...first,readNote:error.message}; }
             }
-            if (response.status === 429) throw previewError('PREVIEW_LIMIT','O serviço de fotos atingiu o limite temporário. Tente mais tarde ou cole o endereço da foto.');
-            if (!response.ok) throw previewError('PREVIEW_BLOCKED','A página da Shopee não liberou a prévia. Cole o link completo do produto ou escolha uma foto.');
-            let payload;
-            try { payload = await response.json(); }
-            catch { throw previewError('PREVIEW_INVALID','O serviço de fotos respondeu de forma inesperada. Tente novamente.'); }
-            return parsePreview(payload);
+            if (firstError) throw firstError;
+            return first;
           })();
           const info = await Promise.race([request,timeout]);
           cache.set(link,{at:now(),info});
           while (cache.size > 100) cache.delete(cache.keys().next().value);
-          return {...info,images:[...info.images]};
-        } finally { clearTimeout(timer); }
+          return clone(info);
+        } catch(error) { throw annotate(error); }
+        finally { clearTimeout(timer); }
       })();
       pending.set(link,task);
-      try { return await task; }
+      try { return clone(await task); }
       finally { if (pending.get(link) === task) pending.delete(link); }
     }
     lookup.clear = link => link ? cache.delete(link) : cache.clear();
     return lookup;
   }
 
-  return {validShopee,extractShopeeLink,parseSharedProduct,safeImage,parsePrice,cleanTitle,parsePreview,createPreviewLookup};
+  return {validShopee,extractShopeeLink,parseSharedProduct,safeImage,parsePrice,cleanTitle,canonicalProductUrl,parsePreview,createPreviewLookup};
 });

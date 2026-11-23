@@ -130,21 +130,61 @@ function previewTitle(value){
 }
 async function lookupProductPreview(link,force=false){
  if(!validShopee(link))throw new Error('Cole um endereço HTTPS válido da Shopee.');
- if(state.connected){
-  try{
-   const result=await httpsCallable(functions,'previewProduct',{timeout:10000})({url:link});
-   const offer=result?.data?.offer;
-   if(offer&&safeImage(offer.image))return {name:previewTitle(offer.name),image:safeImage(offer.image),images:[safeImage(offer.image)],price:offer.price,source:'API oficial Shopee'};
-  }catch(error){console.info('Prévia pela API indisponível:',errText(error));}
- }
  publicPreviewLookup??=productTools.createPreviewLookup({fetch:(...args)=>fetch(...args)});
- return publicPreviewLookup(link,{force});
+ let page=null,pageError=null;
+ try{page=await publicPreviewLookup(link,{force});}catch(error){pageError=error;}
+ // A leitura da página também traz a descrição; a API complementa somente os campos ausentes.
+ const needsApi=!page||!page.name||!page.image||(page.price==null&&!page.priceNote);
+ if(state.connected&&needsApi){
+  const sourceUrl=[page?.canonicalUrl,page?.resolvedUrl,pageError?.canonicalUrl,link].find(validShopee)||link;
+  try{
+   const result=await httpsCallable(functions,'previewProduct',{timeout:10000})({url:sourceUrl});
+   const offer=result?.data?.offer;
+   if(offer){
+    const merged={...(page||{}),images:[...(page?.images||[])],source:page?'página do produto e API Shopee':'API oficial Shopee'};
+    merged.name ||= previewTitle(offer.name);
+    const apiImage=safeImage(offer.image);
+    if(!merged.image&&apiImage){merged.image=apiImage;if(!merged.images.includes(apiImage))merged.images.unshift(apiImage);}
+    if(!merged.description&&offer.description)merged.description=safeText(offer.description,350);
+    if(merged.price==null&&!merged.priceNote&&offer.price!=null&&String(offer.price).trim()!==''&&Number.isFinite(Number(offer.price))&&Number(offer.price)>=0){
+     merged.price=Number(offer.price);merged.priceSource='API oficial Shopee';
+     merged.priceNote='Preço informado pela API. Confirme a variação escolhida na Shopee.';
+    }
+    if(merged.name||merged.image||merged.description||merged.price!=null)return merged;
+   }
+  }catch(error){console.info('Dados pela API indisponíveis:',errText(error));}
+ }
+ if(page)return page;
+ throw pageError||new Error('A página não disponibilizou os dados do produto.');
+}
+
+function productFieldStatus(form){
+ const field=name=>form.querySelector('[name="'+name+'"]');
+ let hasPrice=false;
+ try{hasPrice=productTools.parsePrice(field('price')?.value)!=null;}catch{}
+ return [
+  {name:'Nome',ready:!!String(field('name')?.value||'').trim()},
+  {name:'Foto',ready:!!safeImage(field('image')?.value)&&form.dataset.photoFailed!==field('image')?.value},
+  {name:'Preço',ready:hasPrice},
+  {name:'Descrição',ready:!!String(field('description')?.value||'').trim()}
+ ];
+}
+function renderProductFieldStatus(form){
+ const fields=form.querySelector('[data-import-fields]');
+ if(!fields)return;
+ fields.innerHTML=productFieldStatus(form).map(item=>`<span class="import-field" data-ready="${item.ready}"><span aria-hidden="true">${item.ready?'✓':'○'}</span> ${item.name}<span class="sr-only">: ${item.ready?'preenchido':'pendente'}</span></span>`).join('');
+}
+function showProductPriceNote(form,note){
+ const el=form.querySelector('[data-price-note]');
+ if(!el)return;
+ el.textContent=String(note||'');el.hidden=!note;
 }
 
 function fillProductPreview(form,info){
  const title=form.querySelector('[name="name"]');
  const image=form.querySelector('[name="image"]');
  const price=form.querySelector('[name="price"]');
+ const description=form.querySelector('[name="description"]');
  const suggested=info.name||guessNameFromLink(extractShopeeLink(form.elements.affiliateUrl.value));
  if(title&&suggested&&title.dataset.autofilled!=='0'&&(!title.value||title.dataset.autofilled==='1')){
   title.value=suggested;title.dataset.autofilled='1';
@@ -152,7 +192,10 @@ function fillProductPreview(form,info){
  if(image&&info.image&&image.dataset.autofilled!=='0'&&(!image.value||image.dataset.autofilled==='1')){
   image.value=info.image;image.dataset.autofilled='1';
  }
- if(price&&price.dataset.autofilled!=='0'&&info.price!=null&&(!price.value||price.dataset.autofilled==='1')&&Number.isFinite(Number(info.price))){price.value=Number(info.price).toFixed(2);price.dataset.autofilled='1';}
+ if(price&&price.dataset.autofilled!=='0'&&info.price!=null&&String(info.price).trim()!==''&&(!price.value||price.dataset.autofilled==='1')&&Number.isFinite(Number(info.price))&&Number(info.price)>=0){price.value=Number(info.price).toFixed(2).replace('.',',');price.dataset.autofilled='1';}
+ if(description&&info.description&&description.dataset.autofilled!=='0'&&(!description.value||description.dataset.autofilled==='1')){description.value=safeText(info.description,350);description.dataset.autofilled='1';}
+ if(Object.prototype.hasOwnProperty.call(info,'priceNote'))showProductPriceNote(form,info.priceNote);
+ else if(info.price!=null)showProductPriceNote(form,'Preço encontrado. Confira a disponibilidade e a variação na Shopee.');
  if(info.images?.length){
   const picker=form.querySelector('[data-photo-picker]');
   if(picker){picker.innerHTML=info.images.map((url,i)=>`<button type="button" data-action="pick-photo" data-url="${h(url)}" aria-label="Usar foto ${i+1}" aria-pressed="${image?.value===url}"><img src="${h(url)}" alt="Opção de foto ${i+1}" referrerpolicy="no-referrer"></button>`).join('');picker.hidden=info.images.length<2;}
@@ -160,6 +203,7 @@ function fillProductPreview(form,info){
  renderPreviewCard(form,info.source);
 }
 function renderPreviewCard(form,source=''){
+ renderProductFieldStatus(form);
  const card=form.querySelector('[data-preview-card]');
  if(!card)return;
  const title=safeText(form.querySelector('[name="name"]')?.value,180);
@@ -167,22 +211,23 @@ function renderPreviewCard(form,source=''){
  const category=String(form.querySelector('[name="category"]')?.value||'Outros');
  card.innerHTML=`<div class="mini-preview-image">${image?`<img src="${h(image)}" alt="Imagem encontrada do produto" loading="lazy" referrerpolicy="no-referrer">`:`<span aria-hidden="true">${categoryIcon(category)}</span>`}</div><div class="mini-preview-text"><span>PRÉVIA DA VITRINE ${source?'· '+h(source):''}</span><strong>${h(title||'Seu produto aparecerá aqui')}</strong><small>${image?'✓ Imagem encontrada — você pode alterá-la abaixo.':'A imagem aparece aqui assim que for encontrada.'}</small></div>`;
  const photo=card.querySelector('img');
- if(photo)photo.onerror=()=>{photo.remove();const ph=card.querySelector('.mini-preview-image');if(ph)ph.textContent='▣';const status=form.querySelector('[data-preview-status]');if(status){status.textContent='A foto encontrada não abriu. Tente outra imagem ou cole o endereço da foto.';status.dataset.status='warning';}const help=form.querySelector('[data-photo-help]');if(help)help.hidden=false;};
+ if(photo)photo.onerror=()=>{form.dataset.photoFailed=image;renderProductFieldStatus(form);photo.remove();const ph=card.querySelector('.mini-preview-image');if(ph)ph.textContent='▣';const status=form.querySelector('[data-preview-status]');if(status){status.textContent='A foto encontrada não abriu. Tente outra imagem ou cole o endereço da foto.';status.dataset.status='warning';}const help=form.querySelector('[data-photo-help]');if(help)help.hidden=false;};
 }
 function previewLink(form){return extractShopeeLink(form.elements.originalUrl?.value)||extractShopeeLink(form.elements.affiliateUrl.value);}
 async function resolveProductPreview(form,url,seq,force=false){
  const status=form.querySelector('[data-preview-status]');
- if(status){status.textContent='Buscando foto e nome do produto…';status.dataset.status='loading';}
+ if(status){status.textContent='Lendo a página para buscar nome, foto, preço e descrição…';status.dataset.status='loading';}
  try{
   const info=await lookupProductPreview(url,force);
   if(seq!==previewSequence||!form.isConnected||previewLink(form)!==url)return;
   fillProductPreview(form,info);
-  if(status){status.textContent=info.image?'Foto encontrada. Confira os dados e salve.':'Nome encontrado. Cole o endereço da foto abaixo para completar.';status.dataset.status=info.image?'success':'warning';}
+  const missing=productFieldStatus(form).filter(item=>!item.ready).map(item=>item.name.toLocaleLowerCase('pt-BR'));
+  if(status){status.textContent=(missing.length?'Leitura concluída. Não foi possível preencher: '+missing.join(', ')+'. Confira os campos antes de salvar.':'Nome, foto, preço e descrição preenchidos. Confira e salve.')+(info.readNote?' '+info.readNote:'');status.dataset.status=missing.length||info.readNote?'warning':'success';}
   const help=form.querySelector('[data-photo-help]');if(help)help.hidden=!!info.image;
  }catch(error){
   if(seq!==previewSequence||!form.isConnected||previewLink(form)!==url)return;
   fillProductPreview(form,{name:guessNameFromLink(url),image:'',source:''});
-  if(status){status.textContent=error.message||'Não foi possível buscar a foto. Tente o link completo do produto.';status.dataset.status='warning';}
+  if(status){status.textContent=error.message||'Não foi possível ler os dados da página. Tente novamente com o link completo do produto.';status.dataset.status='warning';}
   const help=form.querySelector('[data-photo-help]');if(help)help.hidden=false;const details=form.querySelector('.easy-extra');if(details)details.open=true;
  }
 }
@@ -195,8 +240,9 @@ function scheduleProductPreview(form,immediate=false){
  const detected=form.querySelector('[data-link-detected]');
  if(detected){detected.textContent=affiliate?'Link identificado: '+affiliate:'';detected.hidden=!affiliate;}
  if(form.dataset.previewUrl!==url){
-  for(const name of ['name','image','price']){const input=form.querySelector('[name="'+name+'"]');if(input?.dataset.autofilled==='1'){input.value='';delete input.dataset.autofilled;}}
+  for(const name of ['name','image','price','description']){const input=form.querySelector('[name="'+name+'"]');if(input?.dataset.autofilled==='1'){input.value='';delete input.dataset.autofilled;}}
   const picker=form.querySelector('[data-photo-picker]');if(picker){picker.innerHTML='';picker.hidden=true;}
+  delete form.dataset.photoFailed;showProductPriceNote(form,'');
   form.dataset.previewUrl=url;renderPreviewCard(form);
  }
  if(!url){if(status){status.textContent=form.elements.affiliateUrl.value?'Não encontrei um link da Shopee nesta mensagem. Copie o link novamente.':'Cole um link ou a mensagem compartilhada pela Shopee.';status.dataset.status='idle';}return;}
@@ -329,21 +375,22 @@ function addManual(){
  const edit=!!item.id;
  const received=!edit&&validShopee(receivedLink)?receivedLink:'';
  if(received)setTimeout(()=>{const form=app.querySelector('[data-form="manual-product"]');if(form&&form.elements.affiliateUrl.value===received)scheduleProductPreview(form,true);},0);
- return adminPage(adminHead(edit?'Editar produto':'Adicionar produto','Cole, confira e salve. A foto é buscada a partir do link.',`<a href="#/produtos" class="btn btn-white">Ver produtos</a>`)+`
+ return adminPage(adminHead(edit?'Editar produto':'Adicionar produto','Cole o link para preencher foto, preço e descrição. Depois confira e salve.',`<a href="#/produtos" class="btn btn-white">Ver produtos</a>`)+`
  <div class="panel add-easy-panel"><form data-form="manual-product" class="easy-product-form" data-preview-url="${h(item.originalUrl||item.affiliateUrl||'')}">
  <input type="hidden" name="editId" value="${h(item.id||'')}">
- <div class="capture-url"><label class="form-control"><span class="form-label">Link ou mensagem da Shopee *</span><textarea name="affiliateUrl" class="field shared-input" rows="3" required maxlength="6000" placeholder="Cole aqui o link ou toda a mensagem de Compartilhar da Shopee" aria-describedby="preview-status">${h(item.affiliateUrl||received||'')}</textarea></label><button type="button" class="btn btn-white" data-action="paste-link">Colar</button><button type="button" class="btn btn-orange" data-action="retry-preview">Buscar foto</button></div>
+ <div class="capture-url"><label class="form-control"><span class="form-label">Link ou mensagem da Shopee *</span><textarea name="affiliateUrl" class="field shared-input" rows="3" required maxlength="6000" placeholder="Cole aqui o link ou toda a mensagem de Compartilhar da Shopee" aria-describedby="preview-status">${h(item.affiliateUrl||received||'')}</textarea></label><button type="button" class="btn btn-white" data-action="paste-link">Colar</button><button type="button" class="btn btn-orange" data-action="retry-preview">Buscar dados</button></div>
  <small class="link-detected" data-link-detected hidden></small>
- <p class="hint">Use seu link de afiliado para manter a atribuição. A busca de foto consulta a URL no serviço Microlink.</p>
- <p id="preview-status" class="preview-status" data-preview-status data-status="idle" role="status" aria-live="polite">${edit?'Edite os dados ou busque outra foto.':'Ao colar, buscamos a foto e o nome automaticamente.'}</p>
- <div class="easy-preview-layout"><div class="mini-preview" data-preview-card><div class="mini-preview-image">${safeImage(item.image)?`<img src="${h(safeImage(item.image))}" alt="Foto atual" referrerpolicy="no-referrer">`:'<span>▣</span>'}</div><div class="mini-preview-text"><span>PRÉVIA</span><strong>${h(item.name||'Seu produto aparecerá aqui')}</strong><small>Confira a foto antes de salvar.</small></div></div><div class="easy-title"><label class="form-control"><span class="form-label">Nome do produto *</span><input name="name" class="field" value="${h(item.name||'')}" required maxlength="180" placeholder="Ex.: Fone Bluetooth sem fio"></label><label class="form-control"><span class="form-label">Preço (opcional)</span><input name="price" class="field" inputmode="decimal" value="${item.price==null?'':h(String(item.price).replace('.',','))}" placeholder="R$ 129,90"></label></div></div>
+ <p class="hint">Use seu link de afiliado para manter a atribuição. A leitura automática consulta a página do produto pelo serviço Microlink.</p>
+ <p id="preview-status" class="preview-status" data-preview-status data-status="idle" role="status" aria-live="polite">${edit?'Edite os dados ou consulte novamente a página do produto.':'Ao colar o link, buscamos nome, foto, preço e descrição automaticamente.'}</p>
+ <div class="import-fields" data-import-fields aria-label="Campos do produto"><span class="import-field" data-ready="${!!item.name}">Nome</span><span class="import-field" data-ready="${!!safeImage(item.image)}">Foto</span><span class="import-field" data-ready="${item.price!=null}">Preço</span><span class="import-field" data-ready="${!!item.description}">Descrição</span></div>
+ <div class="easy-preview-layout"><div class="mini-preview" data-preview-card><div class="mini-preview-image">${safeImage(item.image)?`<img src="${h(safeImage(item.image))}" alt="Foto atual" referrerpolicy="no-referrer">`:'<span>▣</span>'}</div><div class="mini-preview-text"><span>PRÉVIA</span><strong>${h(item.name||'Seu produto aparecerá aqui')}</strong><small>Confira a foto antes de salvar.</small></div></div><div class="easy-title"><label class="form-control"><span class="form-label">Nome do produto *</span><input name="name" class="field" value="${h(item.name||'')}" required maxlength="180" placeholder="Ex.: Fone Bluetooth sem fio"></label><label class="form-control"><span class="form-label">Preço (opcional)</span><input name="price" class="field" inputmode="decimal" value="${item.price==null?'':h(String(item.price).replace('.',','))}" placeholder="R$ 129,90" aria-describedby="price-import-note"><small id="price-import-note" class="price-import-note" data-price-note hidden></small></label></div></div>
+ <label class="form-control description-preview"><span class="form-label">Descrição do produto</span><textarea name="description" maxlength="350" rows="4" class="field field-area" placeholder="A descrição da página será preenchida aqui">${h(item.description||'')}</textarea><small class="hint">Resumo de até 350 caracteres da descrição encontrada. Você pode ajustar antes de salvar.</small></label>
  <div class="photo-picker" data-photo-picker hidden aria-label="Fotos encontradas"></div>
- <div class="photo-help" data-photo-help hidden><strong>A foto não apareceu?</strong><p>Abra o produto na Shopee e copie seu endereço completo para o campo abaixo. Seu link de afiliado será preservado. Também é possível colar o endereço HTTPS de uma foto.</p></div>
+ <div class="photo-help" data-photo-help hidden><strong>Algum dado não apareceu?</strong><p>A Shopee pode limitar a leitura da página. Abra o produto e copie seu endereço completo para o campo abaixo. Seu link de afiliado será preservado. Também é possível colar o endereço HTTPS de uma foto.</p></div>
  <details class="simple-details easy-extra"><summary>Ajustar foto e outros detalhes</summary><div class="form-grid">
  <label class="form-control span-2"><span class="form-label">Endereço da foto</span><input name="image" type="url" class="field" maxlength="1400" value="${h(item.image||'')}" placeholder="https://.../foto.jpg"><span class="hint">No computador, use “Copiar endereço da imagem” na foto do produto.</span></label>
- <label class="form-control span-2"><span class="form-label">Link completo do produto para buscar a foto</span><input name="originalUrl" type="url" class="field" maxlength="1200" value="${h(item.originalUrl&&item.originalUrl!==item.affiliateUrl?item.originalUrl:'')}" placeholder="https://shopee.com.br/produto-i.123.456"><span class="hint">Opcional. Não substitui seu link de afiliado.</span></label>
+ <label class="form-control span-2"><span class="form-label">Link completo do produto para ler os dados</span><input name="originalUrl" type="url" class="field" maxlength="1200" value="${h(item.originalUrl&&item.originalUrl!==item.affiliateUrl?item.originalUrl:'')}" placeholder="https://shopee.com.br/produto-i.123.456"><span class="hint">Opcional. Não substitui seu link de afiliado.</span></label>
  <label class="form-control"><span class="form-label">Categoria</span><select name="category" class="field">${categories.slice(1).map(x=>`<option value="${h(x)}" ${(item.category||'Outros')===x?'selected':''}>${h(x)}</option>`).join('')}</select></label>
- <label class="form-control span-2"><span class="form-label">Descrição curta</span><textarea name="description" maxlength="350" class="field field-area">${h(item.description||'')}</textarea></label>
  </div></details><div class="easy-submit"><span>${state.shop?.isPublic?'O produto ficará na sua vitrine pública.':'Sua vitrine está privada.'}</span><button type="submit" class="btn btn-orange btn-primary-action">${edit?'Salvar alterações':'Salvar produto'}</button></div>
  </form></div><p class="hint">Ainda não tem o link? <a class="text-link" href="#/catalogo">Pesquisar na Shopee</a></p>`);
 }
@@ -518,8 +565,10 @@ app.addEventListener('input',event=>{
  const form=event.target.closest('form[data-form="manual-product"]');
  if(!form)return;
  if(['affiliateUrl','originalUrl'].includes(event.target.name))scheduleProductPreview(form);
- if(['name','image','price','category'].includes(event.target.name)){
+ if(['name','image','price','description','category'].includes(event.target.name)){
   if(event.target.dataset)event.target.dataset.autofilled='0';
+  if(event.target.name==='price')showProductPriceNote(form,'Preço editado por você.');
+  if(event.target.name==='image')delete form.dataset.photoFailed;
   renderPreviewCard(form);
  }
 });
@@ -563,7 +612,7 @@ document.addEventListener('click',async(event)=>{
   return;
  }
  if(action==='pick-photo'){
-  const form=el.closest('form');form.elements.image.value=el.dataset.url;form.elements.image.dataset.autofilled='0';
+  const form=el.closest('form');form.elements.image.value=el.dataset.url;form.elements.image.dataset.autofilled='0';delete form.dataset.photoFailed;
   form.querySelectorAll('[data-action="pick-photo"]').forEach(btn=>btn.setAttribute('aria-pressed',String(btn===el)));renderPreviewCard(form);return;
  }
  if(action==='login'||action==='start-store'){if(!state.user){await logIn();}else location.hash='#/painel';return;}

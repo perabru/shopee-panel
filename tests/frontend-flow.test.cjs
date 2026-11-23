@@ -26,6 +26,7 @@ function initialize(){
   setTimeout:()=>0,clearTimeout:()=>{},confirm:()=>true,navigator:{clipboard:{writeText:async()=>{}}}
  };
  const context=vm.createContext(global);
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../product-page.js'),'utf8'),context,{filename:'product-page.js'});
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../product-tools.js'),'utf8'),context,{filename:'product-tools.js'});
  vm.runInContext(source,context,{filename:'app.js'});
  return {context,values,elements};

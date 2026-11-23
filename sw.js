@@ -1,13 +1,13 @@
 'use strict';
 // Increment when publishing changed app assets. This worker owns only its scoped cache.
-const VERSION = '2026-11-23-pwa-v1';
+const VERSION = '2026-11-23-url-v2';
 const PREFIX = 'vitrine-livre-' + self.registration.scope + '-';
 const CACHE = PREFIX + VERSION;
 const BASE = self.registration.scope;
 const OFFLINE = new URL('offline.html',BASE).href;
 // Required shell files: installation fails safely if a deployment omits one.
 const ASSETS = [
-  'offline.html','styles.css','easy.css','app.js','product-tools.js','pwa.js',
+  'offline.html','styles.css','easy.css','app.js','product-page.js','product-tools.js','pwa.js',
   'manifest.webmanifest','icon.svg','icons/icon-192.png','icons/icon-512.png',
   'icons/maskable-512.png','icons/apple-touch-icon.png'
 ].map(path=>new URL(path,BASE).href);
