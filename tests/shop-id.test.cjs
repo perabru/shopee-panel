@@ -11,7 +11,7 @@ const env={
  onAuthStateChanged:()=>{},ref:()=>({}),document:{getElementById:()=>({innerHTML:'',addEventListener(){}}),addEventListener(){}},
  window:{addEventListener(){}},location:{hash:'#/',href:'https://perabru.github.io/shopee-panel/'},setTimeout:()=>0,clearTimeout:()=>{},
 };
-const context=vm.createContext(env);vm.runInContext(source,context);
+const context=vm.createContext(env);vm.runInContext(fs.readFileSync(path.join(__dirname,'../product-tools.js'),'utf8'),context);vm.runInContext(source,context);
 const detect=url=>JSON.parse(JSON.stringify(vm.runInContext(`detectShopFromLink(${JSON.stringify(url)})`,context)));
 test('URL com /shop/NUMERO devolve o ID numerico visivel',()=>{
  assert.deepEqual([detect('https://shopee.com.br/shop/123456789').kind,detect('https://shopee.com.br/shop/123456789').id],['id','123456789']);

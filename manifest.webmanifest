@@ -1,1 +1,74 @@
-{"name":"Vitrine Livre - Afiliados Shopee","short_name":"Vitrine Livre","start_url":"./#/","display":"standalone","background_color":"#f7f8fb","theme_color":"#f45a36","description":"Vitrines públicas de produtos afiliados, com redirecionamento para a Shopee.","icons":[{"src":"./icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
+{
+  "id": "./",
+  "name": "Vitrine Livre — Seus achados",
+  "short_name": "Vitrine Livre",
+  "description": "Organize produtos da Shopee e compartilhe sua vitrine. Acesso à internet necessário para consultar e publicar produtos.",
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "start_url": "./#/",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f7fb",
+  "theme_color": "#f45a36",
+  "categories": [
+    "shopping",
+    "productivity"
+  ],
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Adicionar produto",
+      "short_name": "Adicionar",
+      "url": "./#/adicionar",
+      "icons": [
+        {
+          "src": "./icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Meus produtos",
+      "short_name": "Produtos",
+      "url": "./#/produtos",
+      "icons": [
+        {
+          "src": "./icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ],
+  "prefer_related_applications": false,
+  "share_target": {
+    "action": "./",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "title": "share_title",
+      "text": "share_text",
+      "url": "share_url"
+    }
+  }
+}

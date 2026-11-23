@@ -5,13 +5,29 @@
 
 Crie uma vitrine pública de produtos da Shopee, usando seus próprios links de afiliado. Os visitantes compram **diretamente na Shopee**. Esta plataforma é independente, não é uma cópia oficial da Shopee e não processa compras.
 
-## Crie e compartilhe sua vitrine em poucos cliques
+## Uso simplificado
 
-1. Entre no [site](https://perabru.github.io/shopee-panel/) com **Google**. A vitrine é criada automaticamente no Firebase Realtime Database.
-2. Na Shopee Afiliados, escolha um produto e **gere seu link de afiliado**. [Veja o passo a passo oficial](https://help.shopee.com.br/portal/10/article/128461-Como-gerar-seus-links-de-Afiliado-ou-ID-de-produto-para-compartilhar).
-3. No Shopee Panel, abra **Adicionar produto** e **cole o link**. A plataforma tenta preencher automaticamente **foto e título**, com uma prévia. Você pode mudar o título e, se necessário, informar a imagem manualmente em *Ajustar foto, preço ou categoria*.
-4. Clique em **Publicar produto**. A plataforma abre sua vitrine para você conferir.
-5. Use **Compartilhar**, **Copiar link** ou **WhatsApp**. Qualquer visitante pode visualizar a vitrine sem login e comprar diretamente na Shopee.
+1. Entre com Google e abra **Adicionar**.
+2. Cole o link ou a mensagem completa de **Compartilhar** da Shopee. O painel identifica o link e tenta buscar a foto e o nome. Em mensagens reconhecidas, aproveita também o nome e o preço explícito.
+3. Confira os dados e clique em **Salvar produto**. Preços aceitam `129,90`, `1.299,90` e `129.90`.
+4. Em **Produtos**, use **Compartilhar**, **Copiar oferta** ou **Editar**. A mensagem contém nome, preço (se informado) e o link de afiliado original. O envio acontece no aplicativo escolhido pelo usuário.
+5. Para divulgar toda a seleção, use o link da vitrine na tela **Início**. Vitrines privadas não ficam acessíveis a outros visitantes.
+
+Se a foto não aparecer, tente **Buscar foto** novamente ou informe o endereço completo do produto em **Ajustar foto e outros detalhes**. Esse endereço serve para a busca e não substitui o link de afiliado. Outra alternativa é colar a URL HTTPS da própria imagem. Quando o serviço retornar várias fotos, escolha a correta na prévia.
+
+A lista permite buscar produtos por nome ou categoria. Links idênticos não são cadastrados duas vezes. A edição preserva o registro e a data de criação; itens criados pela integração API mantêm suas ações de compartilhamento, mas a edição manual fica indisponível porque as regras atuais do banco não autorizam esse tipo de atualização.
+
+## Instalar no Android e iOS
+
+O site funciona primeiro no navegador, sem instalação obrigatória. O botão **Instalar app** usa a instalação nativa quando o navegador oferece essa opção.
+
+- **Android:** abra no Chrome e toque em **Instalar app**; se necessário, use o menu do Chrome → **Instalar app / Adicionar à tela inicial**.
+- **iPhone/iPad:** abra no Safari → **Compartilhar → Adicionar à Tela de Início**. Ative **Abrir como App da Web**, se a opção aparecer.
+- **Computador:** Chrome e Edge podem oferecer instalação na barra de endereço.
+
+Em navegadores Android compatíveis, depois da instalação a Vitrine Livre também pode aparecer no menu **Compartilhar** da Shopee. O link recebido abre um cadastro para revisão e nunca publica automaticamente. No iOS, copie e cole o link dentro do aplicativo.
+
+O aplicativo inclui manifesto, ícones próprios, service worker e aviso de atualização. Ao atualizar, salve o formulário antes de confirmar o recarregamento. Sem conexão, uma tela específica explica como retornar; login, catálogo, busca de fotos e gravação de produtos precisam de internet. O cache contém somente arquivos públicos do aplicativo, sem respostas de autenticação, banco, API ou fotos remotas.
 
 **O ID da loja não é necessário** para publicar links de afiliado já gerados. O link deve ter sido convertido pela Shopee: links comuns não passam a gerar comissão por serem cadastrados aqui. O Shopee Panel não recebe pagamentos.
 
@@ -85,6 +101,6 @@ firebase deploy --only functions --project gahepatama-4707c
 
 ## Arquivos principais
 
-`index.html`, `styles.css` e `app.js` formam o site. `database.rules.json` são as regras de segurança do Realtime Database. `functions/` guarda a integração opcional assinada com a API da Shopee, incluindo `previewProduct` por `itemId`. `tests/` contém verificações automatizadas; execute `node --test tests/*.test.cjs` e `node --check app.js`.
+`index.html`, `styles.css`, `easy.css`, `product-tools.js` e `app.js` formam o site. `pwa.js`, `sw.js`, `manifest.webmanifest`, `offline.html` e `icons/` cuidam da instalação. Incremente `VERSION` em `sw.js` ao publicar novas alterações. `database.rules.json` são as regras de segurança do Realtime Database. `functions/` guarda a integração opcional assinada com a API da Shopee, incluindo `previewProduct` por `itemId`. `tests/` contém verificações automatizadas; execute `node --test tests/*.test.cjs` e `node --check app.js`.
 
 O código armazena vitrines em `shopeePanel/v1/shops`, referências públicas em `shopeePanel/v1/publicShops`, produtos em `shopeePanel/v1/publicProducts`. As credenciais e relatórios ficam isolados por usuário e são escritos apenas pelo backend seguro. Nunca publique senhas.
